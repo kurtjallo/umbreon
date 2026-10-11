@@ -1,0 +1,4 @@
+{
+  "verdict": "NOT PROVEN",
+  "because": "Deleting \"Walk dog\" removes \"Buy milk\" from the list when there are two or more tasks."
+}

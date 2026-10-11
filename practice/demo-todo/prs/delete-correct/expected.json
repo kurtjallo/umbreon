@@ -1,0 +1,4 @@
+{
+  "verdict": "PROVEN",
+  "because": "Deleting \"Walk dog\" removes only \"Walk dog\", and focus moves to the Delete button of \"Buy milk\"."
+}
