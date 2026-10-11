@@ -1,6 +1,6 @@
 <div align="center">
 
-# Umbreon
+# <picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/umbreon-dark.png"><img src=".github/assets/umbreon.png" alt="" height="48" align="center"></picture> Umbreon
 
 ### Prove every change works before you merge it.
 
