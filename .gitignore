@@ -1,0 +1,14 @@
+node_modules
+.env*
+.eve
+.vercel
+.next
+.output
+.nitro
+dist
+.DS_Store
+*.tsbuildinfo
+
+# Private, never pushed
+.plan/
+CLAUDE.local.md

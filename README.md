@@ -1,36 +1,54 @@
-# umbreon
+<div align="center">
 
-This is an [eve](https://eve.dev) agent bootstrapped with [`eve init`](https://eve.dev/docs/reference/cli#eve-init).
+# Umbreon
 
-## Getting started
+### Prove every change works before you merge it.
 
-First, run the development server:
+A self-hosted software factory. Coding agents say a change works. Umbreon checks. It starts your app in a sandbox, clicks through it like a user, and posts screenshots, a video, and a pass or fail on the pull request. Free, open source, and it runs on your own machine.
+
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Built on eve](https://img.shields.io/badge/built%20on-eve-000000)](https://github.com/vercel/eve)
+[![Self-hosted](https://img.shields.io/badge/self--hosted-Docker-2496ED)](#quick-start)
+
+**[Features ↓](#features)** · **[Quick start ↓](#quick-start)** · **[How it works ↓](#how-it-works)**
+
+</div>
+
+## Features
+
+- Proves any pull request, whether a person, Claude Code, Codex, or Cursor wrote it.
+- Builds changes from a task and proves them before opening a pull request.
+- Checks side effects too: database rows, sent emails, and logs.
+- Passes a change only when lint, types, tests, coded checks, and an AI reviewer all agree.
+- Blocks merging on GitHub until the change is proven.
+- Runs in Docker with your own OpenRouter, OpenAI, or Anthropic key.
+
+## Quick start
+
+Requires Node.js 24 and Docker.
 
 ```bash
-eve dev
+npx umbreon init           # set up Docker, your model key, and integrations
+umbreon verify --pr 42     # prove a pull request
 ```
 
-The development TUI opens an interactive session where you can send messages to your agent.
+## How it works
 
-Start by editing `agent/instructions.md` to define the agent's identity, purpose, tone, and response guidelines. Configure its model and runtime behavior in `agent/agent.ts`.
+1. Umbreon learns how to run your app and saves the steps in `.umbreon/` in your repo.
+2. For each change, it starts the app in a sandbox and drives it with Playwright.
+3. It checks the results against what the change claims.
+4. It posts the verdict on the pull request. It never merges or deploys.
 
-Add capabilities under `agent/`, including tools, connections, channels, skills, subagents, and schedules. eve reloads your changes as you work.
+GitHub, Linear, Slack, and MCP integrations are optional.
 
-## Learn more
-
-To learn more about eve, explore these resources:
-
-- [eve documentation](https://eve.dev/docs) — learn about eve's features and authoring APIs.
-- [Build an Agent tutorial](https://eve.dev/docs/tutorial/first-agent) — build and deploy an agent step by step.
-- [eve on GitHub](https://github.com/vercel/eve) — view the source and contribute.
-
-## Deploy on Vercel
-
-Deploy your agent to [Vercel](https://vercel.com) from the project root:
+## Development
 
 ```bash
-eve deploy
+npm install
+echo "OPENROUTER_API_KEY=your-key" > .env.local
+npm run dev
 ```
 
-`eve deploy` links a Vercel project if needed and deploys the agent to production. See the [eve deployment documentation](https://eve.dev/docs/guides/deployment/vercel) for authentication, environment variables, and deployment options.
-# umbreon
+## License
+
+[Apache 2.0](LICENSE). Built on [eve](https://github.com/vercel/eve).
