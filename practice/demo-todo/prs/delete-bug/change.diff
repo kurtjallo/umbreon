@@ -1,0 +1,29 @@
+diff --git a/public/app.js b/public/app.js
+index ddbc98e..19de98f 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -69,8 +69,10 @@ function replaceTask(task) {
+ }
+ 
+ function removeTask(id) {
+-  state.list = { kind: "ready", tasks: state.list.tasks.filter((t) => t.id !== id) };
++  const index = state.list.tasks.findIndex((t) => t.id !== id);
++  state.list = { kind: "ready", tasks: state.list.tasks.toSpliced(index, 1) };
+   if (state.editing?.id === id) state.editing = null;
++  return index;
+ }
+ 
+ function render(focusKey = document.activeElement?.dataset.key) {
+@@ -345,9 +347,10 @@ dialogConfirm.addEventListener("click", async () => {
+   const response = await api("DELETE", `/api/tasks/${confirming.id}`);
+   state.confirming = null;
+   if (response.ok || response.status === 404) {
+-    removeTask(confirming.id);
++    const index = removeTask(confirming.id);
++    const next = state.list.tasks[Math.min(index, state.list.tasks.length - 1)];
+     announce("status", "Task deleted.");
+-    render("list");
++    render(next ? `delete-${next.id}` : "list");
+   } else {
+     announce("alert", "Couldn't delete the task. Please try again.");
+     render(`delete-${confirming.id}`);
