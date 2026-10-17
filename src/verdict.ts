@@ -14,12 +14,12 @@ export type StepResult =
 
 export type CheckRun = { checkId: string; steps: StepResult[]; video: Evidence; trace: Evidence; appLog: Evidence };
 
+export type Stage = "repo" | "look" | "plan" | "rehearse" | "drive";
 export type Halt =
   | { stage: "repo"; reason: "diff_does_not_apply"; detail: string }
   | { stage: "look"; reason: "app_never_ready"; detail: string }
   | { stage: "plan"; reason: "no_valid_plan"; problems: string[] }
-  | { stage: "drive"; reason: "interrupted" }
-  | { stage: "drive"; reason: "time_cap" };
+  | { stage: Stage; reason: "interrupted" | "time_cap" };
 
 type OutcomeBase = { checkId: string; claimId: string; it: string };
 export type PassedOutcome = OutcomeBase & { result: "passed" };

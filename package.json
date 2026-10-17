@@ -2,6 +2,9 @@
   "name": "umbreon",
   "version": "0.0.0",
   "type": "module",
+  "bin": {
+    "umbreon": "./src/cli.ts"
+  },
   "imports": {
     "#*": "./agent/*",
     "#evals/*": "./evals/*"
@@ -13,7 +16,9 @@
     "eval": "eve eval",
     "start": "eve start",
     "test": "node --test 'src/**/*.test.ts' 'scripts/**/*.test.ts'",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "verify": "node src/cli.ts verify",
+    "repeat": "node scripts/repeat.ts"
   },
   "dependencies": {
     "@openrouter/ai-sdk-provider": "^3.1.0",
