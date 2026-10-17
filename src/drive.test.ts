@@ -10,7 +10,7 @@ import { chromium, type Browser } from "playwright";
 import { DEMO_TODO, loadCase, preflight, prepareApp, withApp, type Repo, type RunningApp } from "./app.ts";
 import { lookAtApp, rehearseCheck, runCheck } from "./drive.ts";
 import { ScenarioSchema, checksOf, freeze, type FrozenScenario } from "./scenario.ts";
-import { decide, type CheckRun, type Evidence, type Outcome, type Verdict } from "./verdict.ts";
+import { decide, failureBefore, type CheckRun, type Evidence, type Outcome, type Verdict } from "./verdict.ts";
 
 const APP_DIR = fileURLToPath(new URL("../practice/demo-todo", import.meta.url));
 const PR_TEXT = readFileSync(join(APP_DIR, "prs/delete-correct/pr.md"), "utf8");
@@ -163,6 +163,21 @@ test("an app that stopped answering gives could not run at step 1, with the vide
   assert.ok(rest.every((step) => step.status === "skipped"));
   assert.ok(await onDisk(run.video), "video");
   assert.ok(await onDisk(run.trace), "trace");
+});
+
+test("an app that crashes during the check makes the failed then step could not run (app down), so it never counts as failing before", async () => {
+  const dir = await patchedApp("exits-on-delete", {
+    "server.js": (js) => js.replace('if (req.method === "DELETE") {', 'if (req.method === "DELETE") {\n      process.exit(1);'),
+  });
+  const check = checksOf(fixture("good"))[0];
+  const run = await withApp(dir, DEMO_TODO, { runId: `crash-${process.pid}`, check: check.id }, never, (app) =>
+    runCheck(browser, app, check, join(tmp, "runs", "crash", check.id), never));
+  assert.deepEqual(run.steps.map((step) => step.status), [...Array(7).fill("passed"), "could_not_run"]);
+  const then = run.steps[7];
+  assert.ok(then.status === "could_not_run", JSON.stringify(then));
+  assert.equal(then.cause, "app_down");
+  assert.equal(then.detail, 'the app stopped running: expected "Buy milk", saw "Walk dog", "Buy milk"');
+  assert.equal(failureBefore(check, run), null);
 });
 
 test("rehearsal on the old app passes every good check and stops the check with no setup", async () => {

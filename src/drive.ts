@@ -180,17 +180,20 @@ async function observe(page: Page, a: Assertion): Promise<Observation> {
   }
 }
 
-async function confirm(page: Page, a: Assertion, phase: Phase): Promise<Problem | null> {
+async function confirm(s: Session, a: Assertion, phase: Phase): Promise<Problem | null> {
   const deadline = Date.now() + ASSERT_MS;
-  let seen = await observe(page, a);
+  let seen = await observe(s.page, a);
   while (!seen.holds && Date.now() < deadline) {
     await sleep(POLL_MS);
-    seen = await observe(page, a);
+    seen = await observe(s.page, a);
   }
   if (seen.holds) return null;
+  const saw = `expected ${seen.expected}, saw ${seen.observed}`;
+  // A dead app leaves its last page on screen, and a failure read from that page says nothing about the app.
+  if (!(await s.app.alive())) return cannot("app_down", `the app stopped running: ${saw}`);
   return phase === "then"
     ? { status: "failed", expected: seen.expected, observed: seen.observed }
-    : cannot("setup_failed", `expected ${seen.expected}, saw ${seen.observed}`);
+    : cannot("setup_failed", saw);
 }
 
 async function runStep(s: Session, step: Step, phase: Phase): Promise<Problem | null> {
@@ -214,7 +217,7 @@ async function runStep(s: Session, step: Step, phase: Phase): Promise<Problem | 
     case "expect_count":
     case "expect_focus":
     case "expect_texts":
-      return confirm(s.page, step, phase);
+      return confirm(s, step, phase);
   }
 }
 
