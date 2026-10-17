@@ -36,13 +36,17 @@ function promptOf(model: MockLanguageModelV4, call: number): string {
     .join("\n");
 }
 
-test("planScenario returns a valid plan from one call, sent with the skill as instructions at temperature 0", async () => {
+test("planScenario returns a valid plan from one call, with the skill and the schema as instructions at temperature 0", async () => {
   const model = new MockLanguageModelV4({ doGenerate: [reply(good())] });
   const result = await planScenario(input, model, signal);
   assert.deepEqual(result, { ok: true, scenario: good(), calls: 1, usage: { inputTokens: 100, outputTokens: 10 } });
   const call = model.doGenerateCalls[0];
   assert.equal(call.temperature, 0);
-  assert.deepEqual(call.prompt[0], { role: "system", content: systemPrompt() });
+  const system = call.prompt[0];
+  assert.equal(system.role, "system");
+  assert.ok(system.role === "system" && system.content.startsWith(`${systemPrompt()}\n\nReply with only one JSON object`));
+  assert.ok(system.role === "system" && system.content.includes('"claims"'));
+  assert.deepEqual(call.responseFormat, { type: "json" }, "no schema for the server to enforce");
   assert.equal(promptOf(model, 0), renderPlannerInput(input));
 });
 

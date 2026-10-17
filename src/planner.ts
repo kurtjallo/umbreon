@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { generateText, NoObjectGeneratedError, Output, TypeValidationError, type LanguageModel, type LanguageModelUsage } from "ai";
+import { generateText, NoObjectGeneratedError, Output, type LanguageModel, type LanguageModelUsage } from "ai";
 import { z } from "zod";
 import { CheckSchema, ScenarioSchema, planProblems, replaceChecks, type PlanSource, type Scenario, type UiReference } from "./scenario.ts";
 
@@ -35,10 +35,14 @@ const bullets = (lines: readonly string[]) => lines.map((line) => `- ${line}`).j
 const tokensOf = (usage?: LanguageModelUsage): Usage => ({ inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 });
 const add = (a: Usage, b: Usage): Usage => ({ inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens });
 
-function replyProblems(error: NoObjectGeneratedError): string[] {
-  const cause = TypeValidationError.isInstance(error.cause) ? error.cause.cause : undefined;
-  if (!(cause instanceof z.core.$ZodError)) return [error.message];
-  return cause.issues.map((issue) => `${issue.path.join(".") || "answer"}: ${issue.message}`);
+const issuesOf = (error: z.ZodError) => error.issues.map((issue) => `${issue.path.join(".") || "answer"}: ${issue.message}`);
+
+/**
+ * The schema goes in the instructions and zod checks the reply here. OpenRouter spreads a model over many servers,
+ * and each enforces a response schema its own way: one turned setup actions into assertions, one rejected our regex.
+ */
+function instructionsFor(schema: z.ZodType): string {
+  return `${systemPrompt()}\n\nReply with only one JSON object that matches this JSON Schema:\n${JSON.stringify(z.toJSONSchema(schema, { reused: "ref" }))}`;
 }
 
 /** Throws only when the caller's signal aborts; every other failure comes back as problems the retry can show the model. */
@@ -47,17 +51,21 @@ async function ask<T>(model: LanguageModel, schema: z.ZodType<T>, prompt: string
   try {
     const result = await generateText({
       model,
-      instructions: systemPrompt(),
+      instructions: instructionsFor(schema),
       prompt,
-      output: Output.object({ schema }),
+      output: Output.json(),
       temperature: 0,
+      // At its default level DeepSeek sometimes thought for over 26,000 tokens, then answered with nothing.
+      providerOptions: { openrouter: { reasoning: { effort: "medium" } } },
       abortSignal: AbortSignal.any([signal, timeout]),
     });
-    return { ok: true, output: result.output, usage: tokensOf(result.usage) };
+    const usage = tokensOf(result.usage);
+    const parsed = schema.safeParse(result.output);
+    return parsed.success ? { ok: true, output: parsed.data, usage } : { ok: false, problems: issuesOf(parsed.error), usage };
   } catch (error) {
     if (signal.aborted) throw error;
     if (timeout.aborted) return { ok: false, problems: [`the call took over ${CALL_TIMEOUT_MS / 1000} s and was cut off`], usage: tokensOf() };
-    if (NoObjectGeneratedError.isInstance(error)) return { ok: false, problems: replyProblems(error), usage: tokensOf(error.usage) };
+    if (NoObjectGeneratedError.isInstance(error)) return { ok: false, problems: ["the reply was not one complete JSON object"], usage: tokensOf(error.usage) };
     return { ok: false, problems: [String(error instanceof Error ? error.message : error).split("\n")[0].slice(0, 300)], usage: tokensOf() };
   }
 }
