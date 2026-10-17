@@ -34,7 +34,12 @@ const quoted = (texts: readonly string[]) => (texts.length ? texts.map((text) =>
 const textOf = (problem: Problem) => (problem.status === "failed" ? `expected ${problem.expected}, saw ${problem.observed}` : problem.detail);
 
 async function openSession(browser: Browser, app: RunningApp, signal: AbortSignal, options: BrowserContextOptions = {}): Promise<Session> {
-  const context = await browser.newContext({ viewport: VIEWPORT, ...options });
+  const context = await browser.newContext({ viewport: VIEWPORT, serviceWorkers: "block", ...options });
+  // The app's own script runs in this browser, on this machine, so it may reach the app and nothing else.
+  const origin = new URL(app.origin).origin;
+  const socketOrigin = origin.replace(/^http/, "ws");
+  await context.route((url) => url.origin !== origin, (route) => route.abort("blockedbyclient"));
+  await context.routeWebSocket((url) => url.origin !== socketOrigin, (socket) => socket.close());
   const page = await context.newPage();
   let inFlight = 0;
   let crashed = false;

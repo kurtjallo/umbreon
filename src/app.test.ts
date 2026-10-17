@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmod, cp, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -26,6 +27,29 @@ const runId = (check: string) => `test-${process.pid}-${check}`;
 async function containersOfRun(id: string): Promise<string[]> {
   const { stdout } = await exec("docker", ["ps", "-a", "--filter", `label=umbreon.run=${id}`, "--format", "{{.Names}}"]);
   return stdout.split("\n").filter(Boolean).sort();
+}
+
+async function networksOfRun(id: string): Promise<string[]> {
+  const { stdout } = await exec("docker", ["network", "ls", "--filter", `label=umbreon.run=${id}`, "--format", "{{.Name}}"]);
+  return stdout.split("\n").filter(Boolean).sort();
+}
+
+async function inspect(name: string) {
+  return JSON.parse((await exec("docker", ["inspect", name])).stdout)[0];
+}
+
+async function deadPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", ""]);
+  await once(child, "exit");
+  assert.ok(child.pid);
+  return child.pid;
+}
+
+/** A running container on its own internal network, both labeled as owned by `pid`, the way withApp leaves them. */
+async function plant(name: string, pid: number, id: string): Promise<void> {
+  const owner = ["--label", `umbreon.owner=${pid}`, "--label", `umbreon.run=${id}`];
+  await exec("docker", ["network", "create", "--internal", ...owner, `${name}-net`]);
+  await exec("docker", ["run", "-d", "--name", name, ...owner, "--network", `${name}-net`, DEMO_TODO.image, "node", "-e", "setInterval(() => {}, 1e9)"]);
 }
 
 async function titles(origin: string): Promise<string[]> {
@@ -104,32 +128,46 @@ test("withApp runs the old app in a locked-down container and removes it", async
     assert.deepEqual(await titles(app.origin), ["Alpha"]);
     assert.match(await app.logs(), /Listening on http:\/\/0\.0\.0\.0:3000/);
 
-    const { stdout } = await exec("docker", ["inspect", "-f", "{{json .HostConfig}}", `umbreon-${id}-c1.1`]);
-    const host = JSON.parse(stdout);
-    assert.deepEqual(
-      {
-        readOnly: host.ReadonlyRootfs,
-        binds: host.Binds,
-        capDrop: host.CapDrop,
-        securityOpt: host.SecurityOpt,
-        memory: host.Memory,
-        pids: host.PidsLimit,
-        ports: host.PortBindings,
-        autoRemove: host.AutoRemove,
-      },
-      {
-        readOnly: true,
-        binds: [`${prepared.old.dir}:/app:ro`],
-        capDrop: ["ALL"],
-        securityOpt: ["no-new-privileges"],
-        memory: 512 * 1024 * 1024,
-        pids: 256,
-        ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "" }] },
-        autoRemove: false,
-      },
-    );
+    const name = `umbreon-${id}-c1.1`;
+    const shape = (c: any) => ({
+      user: c.Config.User,
+      readOnly: c.HostConfig.ReadonlyRootfs,
+      tmpfs: c.HostConfig.Tmpfs,
+      binds: c.HostConfig.Binds,
+      capDrop: c.HostConfig.CapDrop,
+      securityOpt: c.HostConfig.SecurityOpt,
+      memory: c.HostConfig.Memory,
+      pids: c.HostConfig.PidsLimit,
+      ports: c.HostConfig.PortBindings,
+      networks: Object.keys(c.NetworkSettings.Networks).sort(),
+      autoRemove: c.HostConfig.AutoRemove,
+    });
+    const locked = {
+      user: "node",
+      readOnly: true,
+      tmpfs: { "/tmp": "" },
+      capDrop: ["ALL"],
+      securityOpt: ["no-new-privileges"],
+      memory: 512 * 1024 * 1024,
+      pids: 256,
+      autoRemove: false,
+    };
+    assert.deepEqual(shape(await inspect(name)), {
+      ...locked,
+      binds: [`${prepared.old.dir}:/app:ro`],
+      ports: {},
+      networks: [`${name}-net`],
+    });
+    assert.deepEqual(shape(await inspect(`${name}-proxy`)), {
+      ...locked,
+      binds: null,
+      ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "" }] },
+      networks: ["bridge", `${name}-net`],
+    });
+    assert.equal((await inspect(`${name}-net`)).Internal, true);
   });
   assert.deepEqual(await containersOfRun(id), []);
+  assert.deepEqual(await networksOfRun(id), []);
 });
 
 test("withApp reports a crashed app with the logs from stderr", async (t) => {
@@ -144,6 +182,7 @@ test("withApp reports a crashed app with the logs from stderr", async (t) => {
   t.diagnostic(`crash reported in ${elapsed} ms`);
   assert.ok(elapsed < 2_500, `crash reported in ${elapsed} ms`);
   assert.deepEqual(await containersOfRun(id), []);
+  assert.deepEqual(await networksOfRun(id), []);
 });
 
 test("withApp stops waiting on abort and still removes the container", async () => {
@@ -156,28 +195,66 @@ test("withApp stops waiting on abort and still removes the container", async () 
     { name: "AbortError" },
   );
   assert.deepEqual(await containersOfRun(id), []);
+  assert.deepEqual(await networksOfRun(id), []);
 });
 
-test("sweepOrphans removes containers whose owner died and keeps the rest", async () => {
-  const child = spawn(process.execPath, ["-e", ""]);
-  await once(child, "exit");
-  assert.ok(child.pid);
+// Other test files sweep at the same time and may take this file's orphan first, so these tests check what is left.
+test("sweepOrphans removes containers and networks whose owner died and keeps the rest", async () => {
   const id = runId("sweep");
   const dead = `umbreon-${id}-dead`;
   const live = `umbreon-${id}-live`;
   const root = `umbreon-${id}-root`;
   // pid 1 is launchd, owned by root, so checking it fails with EPERM.
-  for (const [name, pid] of [[dead, child.pid], [live, process.pid], [root, 1]] as const) {
-    await exec("docker", ["create", "--name", name, "--label", `umbreon.owner=${pid}`, "--label", `umbreon.run=${id}`, DEMO_TODO.image, "true"]);
-  }
+  for (const [name, pid] of [[dead, await deadPid()], [live, process.pid], [root, 1]] as const) await plant(name, pid, id);
   try {
-    const removed = await sweepOrphans();
-    assert.ok(removed.includes(dead), "removes the dead owner's container");
-    assert.ok(!removed.includes(live), "keeps the live owner's container");
-    assert.ok(!removed.includes(root), "keeps a container whose owner can't be signalled");
-    assert.deepEqual(await sweepOrphans(), [], "a second sweep removes nothing");
+    const removed = (await sweepOrphans()).filter((name) => name.includes(id));
+    assert.deepEqual(removed.filter((name) => !name.startsWith(dead)), [], "keeps the live owner's and root's");
     assert.deepEqual(await containersOfRun(id), [live, root]);
+    assert.deepEqual(await networksOfRun(id), [`${live}-net`, `${root}-net`]);
+    assert.deepEqual((await sweepOrphans()).filter((name) => name.includes(id)), [], "a second sweep removes nothing");
   } finally {
     await exec("docker", ["rm", "-f", dead, live, root]);
+    await exec("docker", ["network", "rm", "-f", `${dead}-net`, `${live}-net`, `${root}-net`]);
   }
+});
+
+test("sweeps running at once over the same orphan all succeed and remove it", async () => {
+  const id = runId("race");
+  await plant(`umbreon-${id}-orphan`, await deadPid(), id);
+  const sweeps = await Promise.allSettled([sweepOrphans(), sweepOrphans(), sweepOrphans()]);
+  assert.deepEqual(sweeps.map((s) => (s.status === "rejected" ? String(s.reason) : "swept")), ["swept", "swept", "swept"]);
+  assert.deepEqual(await containersOfRun(id), []);
+  assert.deepEqual(await networksOfRun(id), []);
+});
+
+const CONNECT = `const s = require("net").connect(Number(process.argv[2]), process.argv[1]);
+s.setTimeout(3000, () => { console.log("timeout"); s.destroy(); });
+s.on("connect", () => { console.log("connected"); s.destroy(); });
+s.on("error", (e) => console.log(e.code));`;
+
+test("the app's container reaches neither the internet nor this machine", async () => {
+  let connections = 0;
+  const host = createServer((socket) => {
+    connections++;
+    socket.destroy();
+  });
+  await new Promise<void>((done) => host.listen(0, "127.0.0.1", done));
+  const { port } = host.address() as AddressInfo;
+  const prepared = await prepareApp(await loadCase(CASE_DIR), join(tmp, "isolated"));
+  assert.ok(prepared.ok);
+  const id = runId("isolated");
+  try {
+    await withApp(prepared.old.dir, DEMO_TODO, { runId: id, check: "c1.1" }, AbortSignal.timeout(60_000), async () => {
+      // The app can't resolve host.docker.internal, so its address comes from the proxy, which can.
+      const { stdout: hosts } = await exec("docker", ["exec", `umbreon-${id}-c1.1-proxy`, "getent", "ahostsv4", "host.docker.internal"]);
+      const hostIp = hosts.split(/\s/)[0];
+      for (const [address, toPort] of [["1.1.1.1", "80"], ["host.docker.internal", String(port)], [hostIp, String(port)]]) {
+        const { stdout } = await exec("docker", ["exec", `umbreon-${id}-c1.1`, "node", "-e", CONNECT, address, toPort]);
+        assert.match(stdout.trim(), /^(E[A-Z_]+|timeout)$/, `${address}:${toPort} gave ${stdout.trim()}`);
+      }
+    });
+  } finally {
+    host.close();
+  }
+  assert.equal(connections, 0, "the server on this machine saw no connection");
 });

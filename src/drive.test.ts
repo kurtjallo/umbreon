@@ -221,3 +221,24 @@ test("stopping the run while the page is stuck makes lookAtApp, rehearseCheck an
     assert.ok(took < 3_000, `${name} rejected ${took} ms after the stop`);
   }
 });
+
+test("the app's page reaches only the app's own origin, not another port on this machine", async () => {
+  let connections = 0;
+  const other = createServer((socket) => {
+    connections++;
+    socket.destroy();
+  });
+  const port = await listen(other);
+  try {
+    const dir = await patchedApp("calls-out", {
+      // The demo app's CSP would block these calls on its own, which would hide what the browser allows.
+      "server.js": (js) => js.replace(/^.*"Content-Security-Policy".*\n/m, ""),
+      "public/app.js": (js) => `${js}\nfetch("http://127.0.0.1:${port}/fetch").catch(() => {});\nnew WebSocket("ws://127.0.0.1:${port}/ws");\n`,
+    });
+    const ui = await withApp(dir, DEMO_TODO, { runId: `calls-out-${process.pid}`, check: "look" }, never, (app) => lookAtApp(browser, app, never));
+    assert.match(ui.ariaSnapshot, /button "Add task"/, "the app's own page, script and API still load");
+    assert.equal(connections, 0, "the other port saw no connection");
+  } finally {
+    other.close();
+  }
+});

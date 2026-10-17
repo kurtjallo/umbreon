@@ -54,6 +54,21 @@ const GIT_ENV = {
   GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
 };
 
+const LOCKDOWN = [
+  "--user", "node", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+  "--memory", "512m", "--pids-limit", "256",
+];
+
+// The app's only network is internal, so this proxy is the one way in, and the app has no way out.
+const PROXY = `const net = require("net");
+const port = Number(process.argv[1]);
+net.createServer((client) => {
+  const app = net.connect(port, "app");
+  client.on("error", () => app.destroy());
+  app.on("error", () => client.destroy());
+  client.pipe(app).pipe(client);
+}).listen(port);`;
+
 const git = (dir: string, args: string[]) => exec("git", ["-C", dir, ...args], { env: GIT_ENV });
 const docker = (args: string[]) => exec("docker", args, { maxBuffer: 64 * 1024 * 1024 });
 const stderrOf = (e: unknown) => String((e as { stderr?: string }).stderr || e).trim();
@@ -134,38 +149,34 @@ export async function withApp<T>(
   use: (app: RunningApp) => Promise<T>,
 ): Promise<T> {
   const name = `umbreon-${labels.runId}-${labels.check}`;
+  const proxy = `${name}-proxy`;
+  const network = `${name}-net`;
+  const owner = ["--label", `umbreon.owner=${process.pid}`, "--label", `umbreon.run=${labels.runId}`];
   const logs = () => logsOf(name);
   try {
+    // No signal on these calls: killing the CLI mid-create can leave a container that appears after the removal below.
+    await docker(["network", "create", "--internal", ...owner, network]);
     // No --rm, so a crashed container stays long enough to read its logs.
-    // No signal either: killing the CLI mid-create can leave a container that appears after the rm below.
     await docker([
-      "run", "-d", "--name", name,
-      "--label", `umbreon.owner=${process.pid}`, "--label", `umbreon.run=${labels.runId}`,
-      "-p", `127.0.0.1::${profile.port}`,
+      "run", "-d", "--name", name, ...owner, ...LOCKDOWN,
+      "--network", network, "--network-alias", "app",
       // -v needs an absolute path; a bare name would mean a named volume.
       "-v", `${resolve(repoDir)}:/app:ro`, "-w", "/app",
-      "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-      "--memory", "512m", "--pids-limit", "256",
       ...Object.entries(profile.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
       profile.image, ...profile.command,
     ]);
+    // Docker refuses the default bridge and a user-defined network in one `run`, so the proxy joins the app's network after.
+    await docker(["run", "-d", "--name", proxy, ...owner, ...LOCKDOWN, "-p", `127.0.0.1::${profile.port}`,
+      profile.image, "node", "-e", PROXY, String(profile.port)]);
+    await docker(["network", "connect", network, proxy]);
     signal.throwIfAborted();
-    const origin = await originOf(name, profile.port, logs);
+    const { stdout } = await docker(["port", proxy, `${profile.port}/tcp`]);
+    const origin = `http://${stdout.trim().split("\n")[0]}`;
     await waitReady(name, origin + profile.readyPath, signal, logs);
     return await use({ origin, startUrl: origin + profile.startPath, alive: () => isRunning(name), logs });
   } finally {
-    await exec("docker", ["rm", "-f", name], { timeout: 10_000 }).catch(() => {});
-  }
-}
-
-async function originOf(name: string, port: number, logs: () => Promise<string>): Promise<string> {
-  try {
-    const { stdout } = await docker(["port", name, `${port}/tcp`]);
-    return `http://${stdout.trim().split("\n")[0]}`;
-  } catch (e) {
-    // `docker port` fails on a container that already exited, so a crash shows up here first.
-    if (!(await isRunning(name))) throw new AppNeverReady(await logs());
-    throw e;
+    await exec("docker", ["rm", "-f", name, proxy], { timeout: 10_000 }).catch(() => {});
+    await exec("docker", ["network", "rm", "-f", network], { timeout: 10_000 }).catch(() => {});
   }
 }
 
@@ -175,7 +186,9 @@ async function waitReady(name: string, url: string, signal: AbortSignal, logs: (
     if (await answers200(url, signal)) return;
     signal.throwIfAborted();
     if (Date.now() > deadline) throw new AppNeverReady(await logs());
-    if (poll % 10 === 0 && !(await isRunning(name))) throw new AppNeverReady(await logs());
+    // The proxy answers for the app, so only `docker inspect` shows a crash. Poll 1 catches a crash on start;
+    // later checks are spaced out because each one is a Docker call.
+    if (poll % 10 === 1 && !(await isRunning(name))) throw new AppNeverReady(await logs());
     await sleep(100);
   }
 }
@@ -211,18 +224,40 @@ async function logsOf(name: string): Promise<string> {
   }
 }
 
+/** Removes the containers and networks whose owner process is gone. */
 export async function sweepOrphans(): Promise<string[]> {
-  const { stdout } = await docker([
-    "ps", "-a", "--filter", "label=umbreon.owner", "--format", '{{.Names}}\t{{.Label "umbreon.owner"}}',
-  ]);
-  const orphans = stdout
+  const containers = await orphans(["ps", "-a"], "{{.Names}}");
+  const networks = await orphans(["network", "ls"], "{{.Name}}");
+  if (containers.length > 0) await removeOrphans(["rm", "-f", ...containers]);
+  if (networks.length > 0) await removeOrphans(["network", "rm", "-f", ...networks]);
+  return [...containers, ...networks];
+}
+
+// Another process may be sweeping the same orphans right now. Its container removals and the network endpoints they
+// hold clear in moments, so these errors mean wait and retry until the orphans are gone; any other error is real.
+const SETTLING = /No such container|is already in progress|has active endpoints|^exit status \d+$/;
+
+async function removeOrphans(args: string[]): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      await docker(args);
+      return;
+    } catch (e) {
+      if (Date.now() > deadline || !stderrOf(e).split("\n").every((line) => SETTLING.test(line))) throw e;
+      await sleep(100);
+    }
+  }
+}
+
+async function orphans(list: string[], nameFormat: string): Promise<string[]> {
+  const { stdout } = await docker([...list, "--filter", "label=umbreon.owner", "--format", `${nameFormat}\t{{.Label "umbreon.owner"}}`]);
+  return stdout
     .split("\n")
     .filter(Boolean)
     .map((line) => line.split("\t"))
     .filter(([, pid]) => !isAlive(Number(pid)))
-    .map(([name]) => name);
-  if (orphans.length > 0) await docker(["rm", "-f", ...orphans]);
-  return orphans;
+    .map(([found]) => found);
 }
 
 function isAlive(pid: number): boolean {
