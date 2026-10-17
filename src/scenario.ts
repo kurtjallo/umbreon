@@ -58,6 +58,9 @@ export type Claim = DeepReadonly<z.infer<typeof ClaimSchema>>;
 export type Scenario = DeepReadonly<z.infer<typeof ScenarioSchema>>;
 export type NumberedCheck = Check & { readonly id: string; readonly claimId: string; readonly claimIndex: number; readonly checkIndex: number };
 
+/** What the planner learns about the running app before it writes a plan. */
+export type UiReference = { ariaSnapshot: string; files: { url: string; text: string }[]; truncated: boolean };
+
 export type PlanSource =
   | { kind: "model"; modelId: string; calls: number; usage: { inputTokens: number; outputTokens: number } }
   | { kind: "file"; path: string };
