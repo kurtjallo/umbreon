@@ -14,10 +14,11 @@ export type StepResult =
 
 export type CheckRun = { checkId: string; steps: StepResult[]; video: Evidence; trace: Evidence; appLog: Evidence };
 
-export type Stage = "repo" | "look" | "plan" | "rehearse" | "drive" | "baseline";
+export type Stage = "repo" | "look" | "sort" | "plan" | "rehearse" | "drive" | "baseline";
 export type Halt =
   | { stage: "repo"; reason: "diff_does_not_apply"; detail: string }
   | { stage: "look"; reason: "app_never_ready"; detail: string }
+  | { stage: "sort"; reason: "no_valid_sort"; problems: string[] }
   | { stage: "plan"; reason: "no_valid_plan"; problems: string[] }
   | { stage: Stage; reason: "interrupted" | "time_cap" };
 

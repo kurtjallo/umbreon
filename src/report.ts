@@ -100,6 +100,7 @@ function haltLines(halt: Halt): string[] {
   switch (halt.reason) {
     case "diff_does_not_apply": return ["Stopped: the change does not apply to the app.", ...indented(halt.detail)];
     case "app_never_ready": return ["Stopped: the app never answered.", ...indented(halt.detail)];
+    case "no_valid_sort": return ["Stopped: the PR's sentences could not be sorted into testable and not testable.", ...halt.problems.map((problem) => `   - ${problem}`)];
     case "no_valid_plan": return ["Stopped: no valid plan.", ...halt.problems.map((problem) => `   - ${problem}`)];
     case "interrupted": return ["Stopped: interrupted."];
     case "time_cap": return ["Stopped: the run hit its time cap."];

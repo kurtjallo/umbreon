@@ -62,6 +62,7 @@ export type Step = Action | Assertion;
 export type Check = DeepReadonly<z.infer<typeof CheckSchema>>;
 export type Claim = DeepReadonly<z.infer<typeof ClaimSchema>>;
 export type Scenario = DeepReadonly<z.infer<typeof ScenarioSchema>>;
+export type NotTestable = Scenario["notTestable"][number];
 export type NumberedCheck = Check & { readonly id: string; readonly claimId: string; readonly claimIndex: number; readonly checkIndex: number };
 
 /** What the planner learns about the running app before it writes a plan. */
@@ -186,7 +187,7 @@ export function planProblems(scenario: Scenario, prText: string): string[] {
     const which = `sentence ${i + 1} of the PR text, ${JSON.stringify(sentence)},`;
     if (claimed.has(i) && marked.has(i)) problems.push(`${which} is quoted by a claim and also marked not testable; keep only one`);
     if (!claimed.has(i) && !marked.has(i)) {
-      problems.push(`${which} is neither quoted by a claim nor marked not testable; write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app`);
+      problems.push(`${which} is neither quoted by a claim nor marked not testable; write a claim that quotes it`);
     }
   });
   for (const check of checksOf(scenario)) {

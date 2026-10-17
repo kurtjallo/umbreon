@@ -73,7 +73,7 @@ test("planProblems rejects a plan that leaves a PR sentence unaccounted for", ()
   scenario.claims.splice(1, 1);
   assert.deepEqual(planProblems(scenario, prText), [
     'sentence 2 of the PR text, "Now focus moves to the Delete button of the next task.", is neither quoted by a claim nor marked not testable; '
-      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+      + "write a claim that quotes it",
   ]);
 });
 
@@ -91,7 +91,7 @@ test("planProblems holds a not-testable quote to the same rules as a claim's", (
   assert.deepEqual(planProblems(scenario, prText), [
     'notTestable 1: "quote" is not in any sentence of the PR text; copy it exactly from one sentence',
     `sentence 1 of the PR text, ${JSON.stringify(sentencesOf(prText)[0])}, is neither quoted by a claim nor marked not testable; `
-      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+      + "write a claim that quotes it",
   ]);
 });
 
@@ -101,7 +101,7 @@ test("planProblems rejects a quote that is in no PR sentence", () => {
   assert.deepEqual(planProblems(scenario, prText), [
     'claim 1: "quote" is not in any sentence of the PR text; copy it exactly from one sentence',
     'sentence 5 of the PR text, "Delete still removes only the task you clicked.", is neither quoted by a claim nor marked not testable; '
-      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+      + "write a claim that quotes it",
   ]);
 });
 
@@ -111,7 +111,7 @@ test("planProblems rejects a quote that matches more than one PR sentence", () =
   assert.deepEqual(planProblems(scenario, prText), [
     'claim 3: "quote" appears in 3 sentences of the PR text; quote enough to match only one',
     'sentence 3 of the PR text, "If you deleted the last task in the list, it moves to the previous task instead.", is neither quoted by a claim nor marked not testable; '
-      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+      + "write a claim that quotes it",
   ]);
 });
 
@@ -121,7 +121,7 @@ test("a quote that equals a whole sentence picks that sentence, even when anothe
   assert.deepEqual(planProblems({ claims: [claim], notTestable: [{ quote: "Add tests", reason: "Testing note." }] }, pr), []);
   assert.deepEqual(planProblems({ claims: [{ ...claim, quote: "Add test" }], notTestable: [{ quote: "Add tests for delete", reason: "Testing note." }] }, pr), [
     'claim 1: "quote" appears in 2 sentences of the PR text; quote enough to match only one',
-    'sentence 1 of the PR text, "Add tests", is neither quoted by a claim nor marked not testable; write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app',
+    'sentence 1 of the PR text, "Add tests", is neither quoted by a claim nor marked not testable; write a claim that quotes it',
   ]);
 });
 

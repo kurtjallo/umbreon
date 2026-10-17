@@ -9,6 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { MockLanguageModelV4 } from "ai/test";
+import { renderSortInput, systemPrompt } from "./planner.ts";
 import { checksOf, sentencesOf } from "./scenario.ts";
 import type { Evidence, RunRecord } from "./verdict.ts";
 import { verify } from "./verify.ts";
@@ -18,12 +19,20 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 const caseDir = (name: string) => join(REPO, "practice/demo-todo/prs", name);
 const fixture = (name: string) => join(REPO, `scripts/fixtures/demo-todo-${name}.json`);
 const CLEAR_PLAN = join(REPO, "scripts/fixtures/clear-completed-good.json");
+const CLEAR_SORT = { notTestable: [{ sentence: 1, reason: "History: how the app behaved before this change." }] };
 
 let runsDir = "";
 before(async () => {
   runsDir = await mkdtemp(join(tmpdir(), "umbreon-verify-test-"));
 });
 after(() => rm(runsDir, { recursive: true, force: true }));
+
+const reply = (value: unknown) => ({
+  content: [{ type: "text" as const, text: JSON.stringify(value) }],
+  finishReason: { unified: "stop" as const, raw: "stop" },
+  usage: { inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
+  warnings: [],
+});
 
 const nonEmpty = (path: string) => stat(path).then((s) => s.size > 0, () => false);
 const fromFile = (name: string, caseName: string) => verify(caseDir(caseName), { plan: { kind: "file", path: fixture(name) }, runsDir });
@@ -43,14 +52,7 @@ async function assertEvidence(record: RunRecord): Promise<void> {
   }
 }
 
-const reply = (value: unknown) => ({
-  content: [{ type: "text" as const, text: JSON.stringify(value) }],
-  finishReason: { unified: "stop" as const, raw: "stop" },
-  usage: { inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
-  warnings: [],
-});
-
-/** Runs a case with a fake model that answers the planning call and then any repair calls, in order. */
+/** Runs a case with a fake model that answers the sort call, the planning call and then any repair calls, in order. */
 async function fromModel(caseName: string, ...replies: unknown[]) {
   const model = new MockLanguageModelV4({ doGenerate: replies.map(reply) });
   const lines: string[] = [];
@@ -114,9 +116,9 @@ suite("verify", { concurrency: 3 }, () => {
 
   test("a model plan that uses the button the PR adds is kept with no repair call, and a setup that clicks it proves clear-completed-correct", async () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
-    const setupClicksTheButtonFirst = { ...good, claims: [good.claims[2], good.claims[0], good.claims[1]] };
-    const { record, calls, lines, log } = await fromModel("clear-completed-correct", setupClicksTheButtonFirst);
-    assert.equal(calls, 1, log);
+    const setupClicksTheButtonFirst = { claims: [good.claims[2], good.claims[0], good.claims[1]] };
+    const { record, calls, lines, log } = await fromModel("clear-completed-correct", CLEAR_SORT, setupClicksTheButtonFirst);
+    assert.equal(calls, 2, log);
     for (const id of ["c1.1", "c1.2", "c2.1", "c3.1"]) assert.ok(lines.includes(`rehearse: ${id} needs something this change adds; kept`), log);
     assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
     const { checkId, at } = record.verdict.failsBefore;
@@ -126,12 +128,12 @@ suite("verify", { concurrency: 3 }, () => {
 
   test("a model plan whose check forgot its setup still gets a repair call, with only that check and the old app's problem", async () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
-    const forgot = structuredClone(good);
+    const forgot = { claims: structuredClone(good.claims) };
     forgot.claims[1].checks[0].given = [];
-    const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", forgot, { checks: good.claims[1].checks });
-    assert.equal(calls, 2, log);
+    const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, forgot, { checks: good.claims[1].checks });
+    assert.equal(calls, 3, log);
     assert.ok(lines.includes("rehearse: failing c2.1"), log);
-    assert.ok(userText(1).includes('when step 1 click button "Clear completed": nothing matched its target before the "when" steps'), userText(1));
+    assert.ok(userText(2).includes('when step 1 click button "Clear completed": nothing matched its target before the "when" steps'), userText(2));
     assert.ok(lines.includes("repair 1: every check is ready"), log);
     assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
   });
@@ -172,6 +174,38 @@ suite("verify", { concurrency: 3 }, () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("a model plan is sorted before it is planned, and the sorter's call counts in the plan's totals", async () => {
+    const prText = await readFile(join(caseDir("delete-correct"), "pr.md"), "utf8");
+    const history = "History: how focus moved before this change.";
+    const { claims } = JSON.parse(await readFile(fixture("good"), "utf8"));
+    const model = new MockLanguageModelV4({
+      doGenerate: async ({ prompt: [system] }) => reply(system.role === "system" && system.content.startsWith(systemPrompt("sort-sentences"))
+        ? { notTestable: [{ sentence: 1, reason: history }] }
+        : { claims }),
+    });
+    const record = await verify(caseDir("delete-correct"), { plan: { kind: "model", model }, runsDir });
+    assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
+    assert.deepEqual(record.scenario?.source, { kind: "model", modelId: "mock-model-id", calls: 2, usage: { inputTokens: 200, outputTokens: 20 } });
+    assert.deepEqual(record.scenario.notTestable, [{ quote: sentencesOf(prText)[0], reason: history }]);
+    assert.equal(await readFile(join(record.dir, "sort-input.md"), "utf8"), renderSortInput(prText));
+    assert.match(await readFile(join(record.dir, "planner-input.md"), "utf8"), /# Sentences marked not testable\n1\. After you delete a task/);
+  });
+
+  test("a sorter that fails twice stops the run as NOT PROVEN before any plan is written", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: [reply({ notTestable: [{ sentence: 9, reason: "Link: an issue." }] }), reply({ notTestable: [{ sentence: 9, reason: "Link: an issue." }] })],
+    });
+    const record = await verify(caseDir("delete-bug"), { plan: { kind: "model", model }, runsDir });
+    assert.ok(record.verdict.kind === "NOT PROVEN");
+    assert.deepEqual(record.verdict.blockers, [{
+      reason: "halted",
+      halt: { stage: "sort", reason: "no_valid_sort", problems: ["notTestable 1: there is no sentence 9; the sentences are numbered 1 to 5"] },
+    }]);
+    assert.equal(model.doGenerateCalls.length, 2);
+    assert.equal(record.scenario, null);
+    assert.match(await readFile(join(record.dir, "report.txt"), "utf8"), /^Stopped: the PR's sentences could not be sorted into testable and not testable\.$/m);
   });
 
   test("the CLI exits 0 for PROVEN and 1 for NOT PROVEN", async () => {

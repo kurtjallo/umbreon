@@ -152,6 +152,14 @@ test("halt: the reason the run stopped, with no plan and no commit", () => {
     "NOT PROVEN for 8e41c07: 0 of 0 passed, 0 failed, 0 could not run",
   ].join("\n"));
 
+  const unsorted: Halt = { stage: "sort", reason: "no_valid_sort", problems: ["notTestable 1: there is no sentence 9; the sentences are numbered 1 to 5"] };
+  assert.equal(renderReport(recordOf(null, [], unsorted), CWD), [
+    "Commit 8e41c07 · no plan",
+    "Stopped: the PR's sentences could not be sorted into testable and not testable.",
+    "   - notTestable 1: there is no sentence 9; the sentences are numbered 1 to 5",
+    "NOT PROVEN for 8e41c07: 0 of 0 passed, 0 failed, 0 could not run",
+  ].join("\n"));
+
   const stale: Halt = { stage: "repo", reason: "diff_does_not_apply", detail: "error: patch failed: public/app.js:1\nerror: public/app.js: patch does not apply\n" };
   assert.equal(renderReport(recordOf(null, [], stale, null), CWD), [
     "No commit · no plan",

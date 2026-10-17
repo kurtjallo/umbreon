@@ -7,9 +7,11 @@ import type { LanguageModel } from "ai";
 import { chromium } from "playwright";
 import { AppNeverReady, DEMO_TODO, SetupError, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
 import { lookAtApp, rehearseCheck, runCheck } from "./drive.ts";
-import { planScenario, renderPlannerInput, repairChecks, type FailingCheck, type PlannerInput, type Usage } from "./planner.ts";
+import {
+  addUsage, planScenario, renderPlannerInput, renderSortInput, repairChecks, sortSentences, type FailingCheck, type PlannerInput, type Usage,
+} from "./planner.ts";
 import { renderReport, resultOf } from "./report.ts";
-import { ScenarioSchema, checksOf, freeze, planProblems, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
+import { ScenarioSchema, checksOf, freeze, planProblems, sentencesOf, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
 import { decide, failureBefore, outcomesOf, type CheckRun, type Halt, type RunRecord, type Stage } from "./verdict.ts";
 
 export type PlanChoice = { kind: "model"; model: LanguageModel } | { kind: "file"; path: string };
@@ -121,18 +123,26 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
         return await finish({ stage: "look", reason: "app_never_ready", detail: error instanceof AppNeverReady ? error.logs : firstLine(error) });
       }
 
-      stage = "plan";
       let plan: Scenario;
       let calls = 0;
       let usage: Usage = { inputTokens: 0, outputTokens: 0 };
       if (planner.kind === "model") {
-        await writeFile(join(runDir, "planner-input.md"), renderPlannerInput(input));
-        const planned = await planScenario(input, planner.model, signal);
-        calls = planned.calls;
-        usage = planned.usage;
+        stage = "sort";
+        await writeFile(join(runDir, "sort-input.md"), renderSortInput(c.prText));
+        const sorted = await sortSentences(c.prText, planner.model, signal);
+        if (!sorted.ok) return await finish({ stage: "sort", reason: "no_valid_sort", problems: sorted.problems });
+        log(`sort: ${sorted.value.length} of ${sentencesOf(c.prText).length} sentences not testable, ${sorted.calls} calls`);
+
+        stage = "plan";
+        await writeFile(join(runDir, "planner-input.md"), renderPlannerInput(input, sorted.value));
+        const planned = await planScenario(input, sorted.value, planner.model, signal);
+        calls = sorted.calls + planned.calls;
+        usage = addUsage(sorted.usage, planned.usage);
         if (!planned.ok) return await finish({ stage: "plan", reason: "no_valid_plan", problems: planned.problems });
-        plan = planned.scenario;
+        plan = planned.value;
       } else {
+        // A plan file is a hand-written test input, so it keeps its own not-testable list and skips the sorter.
+        stage = "plan";
         const parsed = parsePlan(planner.text, planner.path, c.prText);
         if (!parsed.ok) return await finish({ stage: "plan", reason: "no_valid_plan", problems: parsed.problems });
         plan = parsed.scenario;
