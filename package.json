@@ -12,6 +12,7 @@
     "dev": "eve dev",
     "eval": "eve eval",
     "start": "eve start",
+    "test": "node --test 'src/**/*.test.ts' 'scripts/**/*.test.ts'",
     "typecheck": "tsc"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@vercel/connect": "2.2.0",
     "ai": "^7.0.128",
     "eve": "0.76.3",
+    "playwright": "1.64.0",
     "zod": "4.5.4"
   },
   "devDependencies": {

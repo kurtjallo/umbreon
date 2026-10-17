@@ -1,0 +1,95 @@
+{
+  "claims": [
+    {
+      "quote": "Delete still removes only the task you clicked.",
+      "it": "It should remove only the task you clicked.",
+      "checks": [
+        {
+          "it": "It should remove only Walk dog when you delete it.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Buy milk",
+                "Walk dog"
+              ]
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Walk dog"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete",
+                "within": {
+                  "by": "role",
+                  "role": "dialog",
+                  "name": "Delete task?"
+                }
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "press",
+              "key": "Tab"
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
