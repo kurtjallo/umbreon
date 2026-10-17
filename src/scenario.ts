@@ -95,9 +95,12 @@ export function sentencesOf(prText: string): string[] {
     .filter((sentence) => sentence.length >= MIN_QUOTE))];
 }
 
+/** A quote that is a whole sentence picks that one, even when a longer sentence contains it too. */
 function sentencesContaining(quote: string, prText: string): number[] {
   const needle = normalize(quote);
-  return sentencesOf(prText).flatMap((sentence, index) => (sentence.includes(needle) ? [index] : []));
+  const sentences = sentencesOf(prText);
+  const whole = sentences.indexOf(needle);
+  return whole !== -1 ? [whole] : sentences.flatMap((sentence, index) => (sentence.includes(needle) ? [index] : []));
 }
 
 /** The sentences these quotes pick out. A quote that matches no sentence, or several, picks out none. */

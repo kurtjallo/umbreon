@@ -115,6 +115,16 @@ test("planProblems rejects a quote that matches more than one PR sentence", () =
   ]);
 });
 
+test("a quote that equals a whole sentence picks that sentence, even when another sentence contains it", () => {
+  const pr = "## Testing\n- Add tests\n- Add tests for delete\n";
+  const claim = { ...fixture("good").claims[0], quote: "Add tests for delete" };
+  assert.deepEqual(planProblems({ claims: [claim], notTestable: [{ quote: "Add tests", reason: "Testing note." }] }, pr), []);
+  assert.deepEqual(planProblems({ claims: [{ ...claim, quote: "Add test" }], notTestable: [{ quote: "Add tests for delete", reason: "Testing note." }] }, pr), [
+    'claim 1: "quote" appears in 2 sentences of the PR text; quote enough to match only one',
+    'sentence 1 of the PR text, "Add tests", is neither quoted by a claim nor marked not testable; write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app',
+  ]);
+});
+
 test("planProblems rejects a css :focus selector, even inside within", () => {
   const scenario = fixture("good");
   scenario.claims[3].checks[0].then[1] = {
