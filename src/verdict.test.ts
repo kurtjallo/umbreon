@@ -52,22 +52,26 @@ test("PROVEN when every check passed with its evidence and one check fails on th
   assert.deepEqual(verdict.failsBefore, { checkId: "c2.1", at: failed(lastIndex(c2)) });
 });
 
-test("PROVEN when a when step has nothing to act on before the change, because the change adds it", () => {
-  const verdict = verdictOf({ baseline: [stopAt(passingRun(c1), couldNotRun(c1.given.length))] });
-  assert.ok(verdict.kind === "PROVEN");
-  assert.equal(verdict.failsBefore.checkId, "c1.1");
+test("PROVEN when a setup or when step has nothing to act on before the change, because the change adds it", () => {
+  for (const [what, index] of [["setup", 1], ["when", c1.given.length]] as const) {
+    const at = couldNotRun(index, "no_match");
+    const verdict = verdictOf({ baseline: [stopAt(passingRun(c1), at)] });
+    assert.ok(verdict.kind === "PROVEN", what);
+    assert.deepEqual(verdict.failsBefore, { checkId: "c1.1", at }, what);
+  }
 });
 
-test("NOT PROVEN when nothing fails before the change: passing there too, setup failures, code rules, or a dead app or browser", () => {
+test("NOT PROVEN when nothing fails before the change: passing there too, setup failures, code rules, or a dead app, browser or page", () => {
   const whenAt = c2.given.length;
   const variants: [string, CheckRun][] = [
     ["passes there too", passingRun(c2)],
     ["a setup assertion did not hold", stopAt(passingRun(c2), couldNotRun(4, "setup_failed"))],
-    ["a setup step had nothing to act on", stopAt(passingRun(c2), couldNotRun(1, "no_match"))],
     ["the gone rule", stopAt(passingRun(c2), couldNotRun(whenAt, "gone_rule"))],
     ["the effect rule", stopAt(passingRun(c2), couldNotRun(whenAt, "effect_rule"))],
+    ["the app stopped during setup", stopAt(passingRun(c2), couldNotRun(1, "app_down"))],
     ["the app stopped", stopAt(passingRun(c2), couldNotRun(lastIndex(c2), "app_down"))],
     ["the browser died", stopAt(passingRun(c2), couldNotRun(lastIndex(c2), "browser_error"))],
+    ["the page hung", stopAt(passingRun(c2), couldNotRun(lastIndex(c2), "page_hung"))],
   ];
   for (const [what, run] of variants) {
     const verdict = verdictOf({ baseline: [passingRun(c1), run] });

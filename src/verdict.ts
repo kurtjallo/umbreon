@@ -91,14 +91,15 @@ export function outcomesOf(scenario: Scenario, runs: readonly CheckRun[]): Outco
 }
 
 /**
- * The step that shows a check fails on the app before the change: a failed "then" step, or a "when" or "then" step
- * with nothing to act on, because the change adds it. A setup failure or a code rule shows only that the check
- * could not run there, and a dead app or browser shows nothing about the app at all.
+ * The step that shows a check fails on the app before the change: a failed "then" step, or any step with nothing to
+ * act on, setup included, because the change adds it. The baseline runs only after every check passed on the changed
+ * app, so that same step worked there. Any other setup failure or a code rule shows only that the check could not run
+ * there, and a dead app, browser or page shows nothing about the app at all.
  */
 export function failureBefore(check: Check, run: CheckRun): FailedStep | CouldNotRunStep | null {
   const at = run.steps.find((step) => step.status !== "passed");
   if (at?.status === "failed" && at.index >= check.given.length + check.when.length) return at;
-  if (at?.status === "could_not_run" && at.cause === "no_match" && at.index >= check.given.length) return at;
+  if (at?.status === "could_not_run" && at.cause === "no_match") return at;
   return null;
 }
 

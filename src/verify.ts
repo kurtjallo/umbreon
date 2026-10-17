@@ -140,16 +140,24 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
       log(`plan: ${plan.claims.length} claims, ${checksOf(plan).length} checks${planner.kind === "model" ? `, ${calls} calls` : ""}`);
 
       stage = "rehearse";
+      const rehearseOn = (repoDir: string, check: NumberedCheck, name: string): Promise<string | null> =>
+        withApp(repoDir, DEMO_TODO, { runId, check: name }, signal, (app) => rehearseCheck(browser, app, check, signal)).catch((error) => {
+          if (signal.aborted) throw error;
+          return error instanceof AppNeverReady ? "the app before this change never answered" : firstLine(error);
+        });
+      // A check that fails on the old app but holds on the new one uses something the change adds, so it needs no repair.
+      // The new app can only stop a repair, never shape one, so the model sees only the old app's problem.
       const rehearse = async (checks: readonly NumberedCheck[]): Promise<FailingCheck[]> => {
         const failing: FailingCheck[] = [];
         for (const check of checks) {
           signal.throwIfAborted();
-          const problem = await withApp(prepared.old.dir, DEMO_TODO, { runId, check: `rehearse-${check.id}` }, signal,
-            (app) => rehearseCheck(browser, app, check, signal)).catch((error) => {
-            if (signal.aborted) throw error;
-            return error instanceof AppNeverReady ? "the app before this change never answered" : firstLine(error);
-          });
-          if (problem !== null) failing.push({ claimIndex: check.claimIndex, checkIndex: check.checkIndex, id: check.id, problem });
+          const problem = await rehearseOn(prepared.old.dir, check, `rehearse-${check.id}`);
+          if (problem === null) continue;
+          if (await rehearseOn(prepared.new.dir, check, `rehearse-new-${check.id}`) === null) {
+            log(`rehearse: ${check.id} needs something this change adds; kept`);
+            continue;
+          }
+          failing.push({ claimIndex: check.claimIndex, checkIndex: check.checkIndex, id: check.id, problem });
         }
         return failing;
       };
