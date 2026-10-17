@@ -336,5 +336,11 @@
         }
       ]
     }
+  ],
+  "notTestable": [
+    {
+      "quote": "After you delete a task, focus used to jump to the task list box, so keyboard users had to tab back to where they were.",
+      "reason": "History: how focus moved before this change, not what the changed app does."
+    }
   ]
 }

@@ -35,7 +35,8 @@ if (!args) {
     const plan: PlanChoice = args.scenario ? { kind: "file", path: args.scenario } : { kind: "model", model: await plannerModel() };
     const record = await verify(args.caseDir, { plan, signal: controller.signal, log: (line) => process.stderr.write(`${line}\n`) });
     const { verdict } = record;
-    const code = verdict.kind === "PROVEN" ? 0 : verdict.halt?.reason === "interrupted" ? 130 : 1;
+    const interrupted = verdict.kind === "NOT PROVEN" && verdict.blockers.some((b) => b.reason === "halted" && b.halt.reason === "interrupted");
+    const code = verdict.kind === "PROVEN" ? 0 : interrupted ? 130 : 1;
     exit(code, renderReport(record, process.cwd()), process.stdout);
   } catch (error) {
     exit(2, error instanceof SetupError ? `umbreon: ${error.message}` : String((error as Error).stack ?? error), process.stderr);

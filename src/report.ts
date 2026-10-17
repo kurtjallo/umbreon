@@ -1,6 +1,6 @@
 import { dirname, relative } from "node:path";
 import { checksOf, describeLocator, stepsOf, type Check, type Step } from "./scenario.ts";
-import type { CheckRun, CouldNotRunStep, Evidence, FailedStep, Halt, Outcome, RunRecord, Verdict } from "./verdict.ts";
+import type { Blocker, CheckRun, CouldNotRunStep, Evidence, FailedStep, FailsBefore, Halt, Outcome, RunRecord, Verdict } from "./verdict.ts";
 
 export type Phase = "given" | "when" | "then";
 
@@ -73,19 +73,22 @@ function evidenceLine(run: CheckRun | undefined, at: FailedStep | CouldNotRunSte
   return [`   ${files.length ? `evidence in ${relative(cwd, dir)}: ` : ""}${shown.join(" · ")}`];
 }
 
+function stepLine(check: Check, at: FailedStep | CouldNotRunStep): string {
+  return at.status === "failed"
+    ? `   ${stepName(check, at.index)}: expected ${at.expected}, saw ${at.observed}`
+    : `   ${stepName(check, at.index)} could not run (${at.cause.replace("_", " ")}): ${at.detail}`;
+}
+
 function outcomeLines(outcome: Outcome, check: Check, run: CheckRun | undefined, width: number, cwd: string): string[] {
   const head = `${MARK[outcome.result]} ${outcome.it.padEnd(width)}  [${outcome.checkId}]`;
   switch (outcome.result) {
     case "passed":
       return [head];
-    case "failed": {
-      const { at } = outcome;
-      return [head, `   ${stepName(check, at.index)}: expected ${at.expected}, saw ${at.observed}`, ...evidenceLine(run, at, cwd)];
-    }
+    case "failed":
+      return [head, stepLine(check, outcome.at), ...evidenceLine(run, outcome.at, cwd)];
     case "could_not_run": {
       if (!outcome.at) return [head, `   could not run: ${outcome.detail}`, ...evidenceLine(run, null, cwd)];
-      const { at } = outcome;
-      return [head, `   ${stepName(check, at.index)} could not run (${at.cause.replace("_", " ")}): ${at.detail}`, ...evidenceLine(run, at, cwd)];
+      return [head, stepLine(check, outcome.at), ...evidenceLine(run, outcome.at, cwd)];
     }
     case "evidence_missing":
       return [head, `   passed, but evidence is missing: ${outcome.missing.join(", ")}`, ...evidenceLine(run, null, cwd)];
@@ -103,6 +106,39 @@ function haltLines(halt: Halt): string[] {
   }
 }
 
+export function resultOf(run: CheckRun): string {
+  const at = run.steps.find((step) => step.status !== "passed");
+  return !at ? "passed" : at.status === "could_not_run" ? `could not run (${at.cause.replace("_", " ")})` : at.status;
+}
+
+function blockerLines(blocker: Blocker, baseline: readonly CheckRun[]): string[] {
+  switch (blocker.reason) {
+    case "halted":
+      return haltLines(blocker.halt);
+    case "check_did_not_pass":
+      // The lines for each check and the final count already say which checks did not pass.
+      return [];
+    case "unaccounted_sentences":
+      return [
+        "Not proven: these PR sentences are neither checked nor marked not testable.",
+        ...blocker.sentences.map((sentence) => `   - ${sentence}`),
+      ];
+    case "no_check_fails_before":
+      return [
+        "Not proven: no check fails on the app before this change, so nothing shows the change makes a difference.",
+        `   on the app before this change: ${baseline.length ? baseline.map((run) => `${run.checkId} ${resultOf(run)}`).join(", ") : "no check ran"}`,
+      ];
+  }
+}
+
+function failsBeforeLines(failsBefore: FailsBefore, check: Check, run: CheckRun | undefined, cwd: string): string[] {
+  return [
+    `${failsBefore.checkId} fails on the app before this change, so the change makes a difference.`,
+    stepLine(check, failsBefore.at),
+    ...evidenceLine(run, failsBefore.at, cwd),
+  ];
+}
+
 function finalLine(verdict: Verdict): string {
   const n = verdict.checks.length;
   const forCommit = verdict.commit ? ` for ${short(verdict.commit)}` : "";
@@ -116,15 +152,25 @@ function finalLine(verdict: Verdict): string {
 /** The text `umbreon verify` prints. Evidence paths are shown relative to `cwd`. */
 export function renderReport(record: RunRecord, cwd: string): string {
   const checks = record.scenario ? checksOf(record.scenario) : [];
-  const width = Math.max(0, ...record.verdict.checks.map((outcome) => outcome.it.length));
+  const checkOf = (id: string) => {
+    const check = checks.find((c) => c.id === id);
+    if (!check) throw new Error(`verdict names check ${id}, which is not in the plan`);
+    return check;
+  };
+  const { verdict } = record;
+  const width = Math.max(0, ...verdict.checks.map((outcome) => outcome.it.length));
   const lines = [header(record)];
-  for (const outcome of record.verdict.checks) {
-    const check = checks.find((c) => c.id === outcome.checkId);
-    if (!check) throw new Error(`verdict names check ${outcome.checkId}, which is not in the plan`);
-    lines.push(...outcomeLines(outcome, check, record.runs.find((run) => run.checkId === outcome.checkId), width, cwd));
+  for (const outcome of verdict.checks) {
+    lines.push(...outcomeLines(outcome, checkOf(outcome.checkId), record.runs.find((run) => run.checkId === outcome.checkId), width, cwd));
   }
-  if (record.uncovered.length) lines.push("Not checked:", ...record.uncovered.map((sentence) => `   - ${sentence}`));
-  if (record.verdict.kind === "NOT PROVEN" && record.verdict.halt) lines.push(...haltLines(record.verdict.halt));
-  lines.push(finalLine(record.verdict));
+  const notTestable = record.scenario?.notTestable ?? [];
+  if (notTestable.length) lines.push("Not testable:", ...notTestable.flatMap((note) => [`   - ${JSON.stringify(note.quote)}`, `     ${note.reason}`]));
+  if (verdict.kind === "PROVEN") {
+    const { failsBefore } = verdict;
+    lines.push(...failsBeforeLines(failsBefore, checkOf(failsBefore.checkId), record.baseline.find((run) => run.checkId === failsBefore.checkId), cwd));
+  } else {
+    lines.push(...verdict.blockers.flatMap((blocker) => blockerLines(blocker, record.baseline)));
+  }
+  lines.push(finalLine(verdict));
   return lines.join("\n");
 }

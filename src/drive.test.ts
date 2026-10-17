@@ -13,6 +13,7 @@ import { ScenarioSchema, checksOf, freeze, type FrozenScenario } from "./scenari
 import { decide, type CheckRun, type Evidence, type Outcome, type Verdict } from "./verdict.ts";
 
 const APP_DIR = fileURLToPath(new URL("../practice/demo-todo", import.meta.url));
+const PR_TEXT = readFileSync(join(APP_DIR, "prs/delete-correct/pr.md"), "utf8");
 const CASES = ["delete-correct", "delete-bug"] as const;
 type CaseName = (typeof CASES)[number];
 
@@ -51,7 +52,7 @@ async function verify(fixtureName: string, caseName: CaseName): Promise<{ verdic
     runs.push(await withApp(repo.dir, DEMO_TODO, { runId, check: check.id }, never, (app) =>
       runCheck(browser, app, check, join(tmp, "runs", runId, check.id))));
   }
-  return { verdict: decide({ commit: repo.commit, halt: null, scenario, runs }), runs };
+  return { verdict: decide({ commit: repo.commit, halt: null, scenario, prText: PR_TEXT, runs, baseline: [] }), runs };
 }
 
 const results = (verdict: Verdict) => Object.fromEntries(verdict.checks.map((outcome) => [outcome.checkId, outcome.result]));
@@ -61,9 +62,10 @@ async function onDisk(evidence: Evidence): Promise<boolean> {
   return evidence.state === "captured" && (await stat(evidence.file)).size > 0;
 }
 
-test("good plan: PROVEN on delete-correct, with a screenshot of every step, a video and a trace on disk", async () => {
+test("good plan: every check passes on delete-correct, with a screenshot of every step, a video and a trace on disk", async () => {
   const { verdict, runs } = await verify("good", "delete-correct");
-  assert.equal(verdict.kind, "PROVEN", JSON.stringify(verdict.checks, null, 2));
+  assert.ok(verdict.kind === "NOT PROVEN");
+  assert.deepEqual(verdict.blockers, [{ reason: "no_check_fails_before" }], "only the baseline, which verify runs, is missing");
   for (const run of runs) {
     for (const step of run.steps) {
       assert.ok(step.status === "passed" && (await onDisk(step.screenshot)), `${run.checkId} step ${step.index + 1} screenshot`);

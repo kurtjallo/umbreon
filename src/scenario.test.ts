@@ -28,8 +28,59 @@ test("sentencesOf splits the real PR text into its five sentences and drops the 
   ]);
 });
 
-test("uncoveredSentences lists the PR sentence no claim quotes", () => {
-  assert.deepEqual(uncoveredSentences(fixture("good"), prText), [sentencesOf(prText)[0]]);
+test("sentencesOf reads GitHub's usual layout: headings dropped, each list item its own sentence", () => {
+  assert.deepEqual(sentencesOf("## Summary\n- Delete now removes only the task you clicked.\n- Focus moves next"), [
+    "Delete now removes only the task you clicked.",
+    "Focus moves next",
+  ]);
+  assert.deepEqual(sentencesOf("## Summary\nDelete keeps focus. It moves to the next task.\n\n## Test plan\n- [x] npm test\n"), [
+    "Delete keeps focus.",
+    "It moves to the next task.",
+    "[x] npm test",
+  ]);
+});
+
+test("sentencesOf keeps bullets without full stops apart, in every list style", () => {
+  assert.deepEqual(sentencesOf("Changes:\n- Removes the task\n* Moves focus next\n+ Keeps the list box\n1. Adds a test\n2. Fixes a typo\n   in the label"), [
+    "Changes:",
+    "Removes the task",
+    "Moves focus next",
+    "Keeps the list box",
+    "Adds a test",
+    "Fixes a typo in the label",
+  ]);
+});
+
+test("uncoveredSentences lists the PR sentence no claim quotes and no not-testable entry marks", () => {
+  assert.deepEqual(uncoveredSentences(fixture("good"), prText), []);
+  assert.deepEqual(uncoveredSentences({ ...fixture("good"), notTestable: [] }, prText), [sentencesOf(prText)[0]]);
+});
+
+test("planProblems rejects a plan that leaves a PR sentence unaccounted for", () => {
+  const scenario = fixture("good");
+  scenario.claims.splice(1, 1);
+  assert.deepEqual(planProblems(scenario, prText), [
+    'sentence 2 of the PR text, "Now focus moves to the Delete button of the next task.", is neither quoted by a claim nor marked not testable; '
+      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+  ]);
+});
+
+test("planProblems rejects a sentence that is both quoted by a claim and marked not testable", () => {
+  const scenario = fixture("good");
+  scenario.notTestable.push({ quote: "Delete still removes only", reason: "Already true before this change." });
+  assert.deepEqual(planProblems(scenario, prText), [
+    'sentence 5 of the PR text, "Delete still removes only the task you clicked.", is quoted by a claim and also marked not testable; keep only one',
+  ]);
+});
+
+test("planProblems holds a not-testable quote to the same rules as a claim's", () => {
+  const scenario = fixture("good");
+  scenario.notTestable[0].quote = "focus used to jump to the menu";
+  assert.deepEqual(planProblems(scenario, prText), [
+    'notTestable 1: "quote" is not in any sentence of the PR text; copy it exactly from one sentence',
+    `sentence 1 of the PR text, ${JSON.stringify(sentencesOf(prText)[0])}, is neither quoted by a claim nor marked not testable; `
+      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+  ]);
 });
 
 test("planProblems rejects a quote that is in no PR sentence", () => {
@@ -37,6 +88,8 @@ test("planProblems rejects a quote that is in no PR sentence", () => {
   scenario.claims[0].quote = "Delete removes every task at once.";
   assert.deepEqual(planProblems(scenario, prText), [
     'claim 1: "quote" is not in any sentence of the PR text; copy it exactly from one sentence',
+    'sentence 5 of the PR text, "Delete still removes only the task you clicked.", is neither quoted by a claim nor marked not testable; '
+      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
   ]);
 });
 
@@ -45,6 +98,8 @@ test("planProblems rejects a quote that matches more than one PR sentence", () =
   scenario.claims[2].quote = "the task";
   assert.deepEqual(planProblems(scenario, prText), [
     'claim 3: "quote" appears in 3 sentences of the PR text; quote enough to match only one',
+    'sentence 3 of the PR text, "If you deleted the last task in the list, it moves to the previous task instead.", is neither quoted by a claim nor marked not testable; '
+      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
   ]);
 });
 
@@ -81,6 +136,8 @@ test("the schema rejects shapes the planner must not write", () => {
     ["an id on a claim", (s) => { s.claims[0].id = "only"; }],
     ["an id on a check", (s) => { s.claims[0].checks[0].id = "check-1"; }],
     ["a goto that leaves the app's origin", (s) => { s.claims[0].checks[0].given.unshift({ do: "goto", path: "//example.com/" }); }],
+    ["no notTestable list", (s) => { delete s.notTestable; }],
+    ["a not-testable entry without a reason", (s) => { delete s.notTestable[0].reason; }],
   ];
   for (const [label, mutate] of cases) {
     const scenario = raw("good");

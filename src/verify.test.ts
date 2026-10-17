@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, suite, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { checksOf } from "./scenario.ts";
+import { checksOf, sentencesOf } from "./scenario.ts";
 import type { Evidence, RunRecord } from "./verdict.ts";
 import { verify } from "./verify.ts";
 
@@ -63,17 +63,23 @@ async function cli(args: string[], interruptAfterMs?: number): Promise<Cli & { p
 }
 
 suite("verify", { concurrency: 3 }, () => {
-  test("the good plan proves delete-correct and keeps every check's evidence", async () => {
+  test("the good plan proves delete-correct, because c2.1 fails on the app before it, and keeps every check's evidence", async () => {
     const record = await fromFile("good", "delete-correct");
-    assert.equal(record.verdict.kind, "PROVEN");
+    assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
+    assert.equal(record.verdict.failsBefore.checkId, "c2.1");
+    assert.equal(record.verdict.failsBefore.at.status, "failed");
+    assert.deepEqual(record.baseline.map((run) => run.checkId), ["c1.1", "c2.1"], "c1.1 passes before the change too, and the baseline stops at c2.1");
+    const video = record.baseline[1].video;
+    assert.ok(video.state === "captured" && video.file.startsWith(join(record.dir, "baseline", "c2.1")) && (await nonEmpty(video.file)));
     await assertEvidence(record);
   });
 
   test("the good plan catches delete-bug with failed checks", async () => {
     const record = await fromFile("good", "delete-bug");
-    assert.equal(record.verdict.kind, "NOT PROVEN");
-    assert.equal(record.verdict.halt, null);
+    assert.ok(record.verdict.kind === "NOT PROVEN");
+    assert.deepEqual(record.verdict.blockers, [{ reason: "check_did_not_pass" }]);
     assert.ok(record.verdict.checks.some((outcome) => outcome.result === "failed"), "some check failed");
+    assert.deepEqual(record.baseline, [], "the old app is not run once a check fails");
     await assertEvidence(record);
   });
 
@@ -81,6 +87,38 @@ suite("verify", { concurrency: 3 }, () => {
     const record = await fromFile("vacuous", "delete-bug");
     assert.equal(record.verdict.kind, "NOT PROVEN");
     assert.deepEqual(record.verdict.checks.map((outcome) => outcome.result), ["could_not_run"]);
+  });
+
+  test("a change that only adds a comment is never PROVEN, whether the plan skips the focus promises or calls them not testable", async () => {
+    const dir = await mkdtemp(join(REPO, "practice/demo-todo/prs/do-nothing-"));
+    try {
+      const firstLine = (await readFile(join(REPO, "practice/demo-todo/public/app.js"), "utf8")).split("\n")[0];
+      await writeFile(join(dir, "change.diff"), `--- a/public/app.js\n+++ b/public/app.js\n@@ -1 +1,2 @@\n+// The add form is found once, at start.\n ${firstLine}\n`);
+      await copyFile(join(caseDir("delete-correct"), "pr.md"), join(dir, "pr.md"));
+      const focusPromises = sentencesOf(await readFile(join(dir, "pr.md"), "utf8")).slice(0, 4);
+      const removal = JSON.parse(await readFile(fixture("good"), "utf8")).claims
+        .find((claim: { quote: string }) => claim.quote === "Delete still removes only the task you clicked.");
+      const plans = {
+        skips: { claims: [removal], notTestable: [] },
+        excuses: { claims: [removal], notTestable: focusPromises.map((quote) => ({ quote, reason: "Focus is not something a user can see." })) },
+      };
+      for (const [name, plan] of Object.entries(plans)) await writeFile(join(dir, `${name}.json`), JSON.stringify(plan));
+      const [skips, excuses] = await Promise.all(Object.keys(plans).map((name) =>
+        verify(dir, { plan: { kind: "file", path: join(dir, `${name}.json`) }, runsDir })));
+
+      assert.ok(skips.verdict.kind === "NOT PROVEN");
+      const [halted] = skips.verdict.blockers;
+      assert.ok(halted.reason === "halted" && halted.halt.reason === "no_valid_plan", JSON.stringify(halted));
+      assert.equal(halted.halt.problems.length, 4);
+      assert.match(halted.halt.problems[1], /^sentence 2 of the PR text, "Now focus moves to the Delete button of the next task\.", is neither quoted by a claim nor marked not testable/);
+
+      assert.ok(excuses.verdict.kind === "NOT PROVEN");
+      assert.deepEqual(excuses.verdict.checks.map((outcome) => outcome.result), ["passed"]);
+      assert.deepEqual(excuses.verdict.blockers, [{ reason: "no_check_fails_before" }]);
+      assert.deepEqual(excuses.baseline.map((run) => [run.checkId, run.steps.every((step) => step.status === "passed")]), [["c1.1", true]]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("the CLI exits 0 for PROVEN and 1 for NOT PROVEN", async () => {

@@ -8,9 +8,9 @@ import { chromium } from "playwright";
 import { AppNeverReady, DEMO_TODO, SetupError, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
 import { lookAtApp, rehearseCheck, runCheck } from "./drive.ts";
 import { planScenario, renderPlannerInput, repairChecks, type FailingCheck, type PlannerInput, type Usage } from "./planner.ts";
-import { renderReport } from "./report.ts";
-import { ScenarioSchema, checksOf, freeze, planProblems, uncoveredSentences, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
-import { decide, type CheckRun, type Halt, type RunRecord, type Stage } from "./verdict.ts";
+import { renderReport, resultOf } from "./report.ts";
+import { ScenarioSchema, checksOf, freeze, planProblems, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
+import { decide, failureBefore, outcomesOf, type CheckRun, type Halt, type RunRecord, type Stage } from "./verdict.ts";
 
 export type PlanChoice = { kind: "model"; model: LanguageModel } | { kind: "file"; path: string };
 export type VerifyOptions = { plan: PlanChoice; signal?: AbortSignal; runsDir?: string; log?: (line: string) => void };
@@ -58,10 +58,6 @@ function parsePlan(text: string, path: string, prText: string): { ok: true; scen
   return problems.length ? { ok: false, problems } : { ok: true, scenario: parsed.data };
 }
 
-function resultOf(run: CheckRun): string {
-  return run.steps.find((step) => step.status !== "passed")?.status.replace(/_/g, " ") ?? "passed";
-}
-
 /**
  * Runs one case from start to verdict. The order of the steps lives here, in code.
  * Throws only SetupError; every other outcome, an interrupt included, is a RunRecord written to the run folder.
@@ -86,13 +82,13 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
   let commit: string | null = null;
   let scenario: FrozenScenario | null = null;
   const runs: CheckRun[] = [];
+  const baseline: CheckRun[] = [];
 
   const finish = async (halt: Halt | null): Promise<RunRecord> => {
-    const verdict = decide({ commit, halt, scenario, runs });
+    const verdict = decide({ commit, halt, scenario, prText: c.prText, runs, baseline });
     const record: RunRecord = {
       runId, dir: runDir, caseDir: c.caseDir, base, commit, imageId, scenario,
-      uncovered: scenario ? uncoveredSentences(scenario, c.prText) : [],
-      runs, verdict, startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(),
+      runs, baseline, verdict, startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(),
     };
     await mkdir(runDir, { recursive: true });
     await writeFile(join(runDir, "run.json"), JSON.stringify(record, null, 2));
@@ -177,17 +173,31 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
         : { kind: "file", path: planner.path });
       await writeFile(join(runDir, "scenario.json"), JSON.stringify(scenario, null, 2));
 
-      stage = "drive";
-      for (const check of checksOf(scenario)) {
+      const runOn = async (repoDir: string, check: NumberedCheck, name: string, evidenceDir: string): Promise<CheckRun | null> => {
         signal.throwIfAborted();
         try {
-          const run = await withApp(prepared.new.dir, DEMO_TODO, { runId, check: check.id }, signal,
-            (app) => runCheck(browser, app, check, join(runDir, check.id)));
-          runs.push(run);
-          log(`drive ${check.id}: ${resultOf(run)}`);
+          const run = await withApp(repoDir, DEMO_TODO, { runId, check: name }, signal, (app) => runCheck(browser, app, check, evidenceDir));
+          log(`${stage} ${check.id}: ${resultOf(run)}`);
+          return run;
         } catch (error) {
           if (signal.aborted) throw error;
-          log(`drive ${check.id}: could not run, ${error instanceof AppNeverReady ? "the app never answered" : firstLine(error)}`);
+          log(`${stage} ${check.id}: could not run, ${error instanceof AppNeverReady ? "the app never answered" : firstLine(error)}`);
+          return null;
+        }
+      };
+
+      stage = "drive";
+      for (const check of checksOf(scenario)) {
+        const run = await runOn(prepared.new.dir, check, check.id, join(runDir, check.id));
+        if (run) runs.push(run);
+      }
+
+      if (outcomesOf(scenario, runs).every((outcome) => outcome.result === "passed")) {
+        stage = "baseline";
+        for (const check of checksOf(scenario)) {
+          const run = await runOn(prepared.old.dir, check, `baseline-${check.id}`, join(runDir, "baseline", check.id));
+          if (run) baseline.push(run);
+          if (run && failureBefore(check, run)) break;
         }
       }
       return await finish(null);

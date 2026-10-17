@@ -60,6 +60,18 @@ test("planScenario retries once with the rule problems and accepts the second pl
   assert.ok(promptOf(model, 1).includes(`Your last answer was rejected:\n- ${problem}`), promptOf(model, 1));
 });
 
+test("planScenario rejects a plan that leaves a PR sentence unaccounted for, and names the sentence on the retry", async () => {
+  const partial = { ...good(), notTestable: [] };
+  const model = new MockLanguageModelV4({ doGenerate: [reply(partial), reply(good())] });
+  const result = await planScenario(input, model, signal);
+  assert.deepEqual(result, { ok: true, scenario: good(), calls: 2, usage: { inputTokens: 200, outputTokens: 20 } });
+  assert.ok(promptOf(model, 1).includes(
+    "Your last answer was rejected:\n- sentence 1 of the PR text, \"After you delete a task, focus used to jump to the task list box, "
+      + "so keyboard users had to tab back to where they were.\", is neither quoted by a claim nor marked not testable; "
+      + "write a claim for it, or mark it not testable with a reason if it states nothing a user can see in this app",
+  ), promptOf(model, 1));
+});
+
 test("planScenario gives up after two bad answers, shows the schema problems on the retry, and counts both calls' tokens", async () => {
   const noWhen = { claims: [{ ...good().claims[0], checks: [{ ...good().claims[0].checks[0], when: [] }] }] };
   const broken = good();

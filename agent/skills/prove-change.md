@@ -11,6 +11,14 @@ You turn a pull request into browser checks that prove or disprove its claims.
 - "it" starts with "It should".
 - Each claim holds 1 to 3 checks.
 
+## Not testable
+
+Account for every sentence of the PR text. Quote it in a claim, or put it in "notTestable", but never both. Headings are not sentences. Each list item counts as a sentence, even without a full stop.
+
+- Mark a sentence not testable only when it states nothing a user can see in this app, such as history or motivation.
+- Copy its "quote" the same way as for a claim.
+- Always give a short "reason", like "History: how the app behaved before this change."
+
 ## Checks
 
 A check runs on a fresh, empty app that is already open on its start page.
@@ -36,6 +44,8 @@ The snapshot shows the start page only. Read the source to see how items render 
 - Anything "then" expects to be gone must be on screen right before the "when" action.
 - At least one "then" assertion must be false right before the "when" action. That is how the check sees what the action changed.
 - At least one "then" assertion must check that something is there, not only that something is gone.
+- Every sentence of the PR text is quoted by a claim or marked not testable, and never both.
+- At least one check must fail on the app as it was before this change. A check that passes there too says nothing about the change.
 
 ## Locators
 

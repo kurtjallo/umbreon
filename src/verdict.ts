@@ -1,4 +1,4 @@
-import { checksOf, stepsOf, type FrozenScenario, type NumberedCheck } from "./scenario.ts";
+import { checksOf, sentencesOf, stepsOf, uncoveredSentences, type Check, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
 
 export type Evidence = { state: "captured"; file: string } | { state: "missing"; reason: string } | { state: "not_requested" };
 export type Cause = "no_match" | "ambiguous" | "not_actionable" | "setup_failed" | "gone_rule" | "effect_rule" | "app_down" | "browser_error";
@@ -14,7 +14,7 @@ export type StepResult =
 
 export type CheckRun = { checkId: string; steps: StepResult[]; video: Evidence; trace: Evidence; appLog: Evidence };
 
-export type Stage = "repo" | "look" | "plan" | "rehearse" | "drive";
+export type Stage = "repo" | "look" | "plan" | "rehearse" | "drive" | "baseline";
 export type Halt =
   | { stage: "repo"; reason: "diff_does_not_apply"; detail: string }
   | { stage: "look"; reason: "app_never_ready"; detail: string }
@@ -30,9 +30,19 @@ export type Outcome =
   | (OutcomeBase & { result: "could_not_run"; at: null; detail: string })
   | (OutcomeBase & { result: "evidence_missing"; missing: string[] });
 
+/** One reason a run is not proven. PROVEN means there is none. */
+export type Blocker =
+  | { reason: "halted"; halt: Halt }
+  | { reason: "check_did_not_pass" }
+  | { reason: "unaccounted_sentences"; sentences: string[] }
+  | { reason: "no_check_fails_before" };
+
+/** The step where a frozen check fails on the app before the change, which shows the change makes a difference. */
+export type FailsBefore = { checkId: string; at: FailedStep | CouldNotRunStep };
+
 export type Verdict =
-  | { kind: "PROVEN"; commit: string; checks: PassedOutcome[] }
-  | { kind: "NOT PROVEN"; commit: string | null; halt: Halt | null; checks: Outcome[] };
+  | { kind: "PROVEN"; commit: string; checks: PassedOutcome[]; failsBefore: FailsBefore }
+  | { kind: "NOT PROVEN"; commit: string | null; checks: Outcome[]; blockers: Blocker[] };
 
 export type RunRecord = {
   runId: string;
@@ -42,8 +52,9 @@ export type RunRecord = {
   commit: string | null;
   imageId: string;
   scenario: FrozenScenario | null;
-  uncovered: string[];
   runs: CheckRun[];
+  /** The frozen checks run on the app before the change, in order, up to the first that fails there. */
+  baseline: CheckRun[];
   verdict: Verdict;
   startedAt: string;
   finishedAt: string;
@@ -75,15 +86,52 @@ function outcomeOf(check: NumberedCheck, run: CheckRun | undefined): Outcome {
 
 const isPassed = (outcome: Outcome): outcome is PassedOutcome => outcome.result === "passed";
 
+export function outcomesOf(scenario: Scenario, runs: readonly CheckRun[]): Outcome[] {
+  return checksOf(scenario).map((check) => outcomeOf(check, runs.find((run) => run.checkId === check.id)));
+}
+
+/**
+ * The step that shows a check fails on the app before the change: a failed "then" step, or a "when" or "then" step
+ * with nothing to act on, because the change adds it. A setup failure or a code rule shows only that the check
+ * could not run there, and a dead app or browser shows nothing about the app at all.
+ */
+export function failureBefore(check: Check, run: CheckRun): FailedStep | CouldNotRunStep | null {
+  const at = run.steps.find((step) => step.status !== "passed");
+  if (at?.status === "failed" && at.index >= check.given.length + check.when.length) return at;
+  if (at?.status === "could_not_run" && at.cause === "no_match" && at.index >= check.given.length) return at;
+  return null;
+}
+
+function firstFailureBefore(scenario: Scenario, baseline: readonly CheckRun[]): FailsBefore | null {
+  for (const check of checksOf(scenario)) {
+    const run = baseline.find((r) => r.checkId === check.id);
+    const at = run ? failureBefore(check, run) : null;
+    if (at) return { checkId: check.id, at };
+  }
+  return null;
+}
+
 export function decide(input: {
   commit: string | null;
   halt: Halt | null;
   scenario: FrozenScenario | null;
+  prText: string;
   runs: readonly CheckRun[];
+  baseline: readonly CheckRun[];
 }): Verdict {
-  const { commit, halt, scenario, runs } = input;
-  const checks = scenario ? checksOf(scenario).map((check) => outcomeOf(check, runs.find((run) => run.checkId === check.id))) : [];
-  const everyClaimHasACheck = scenario !== null && scenario.claims.length > 0 && scenario.claims.every((claim) => claim.checks.length > 0);
-  if (halt === null && commit !== null && everyClaimHasACheck && checks.every(isPassed)) return { kind: "PROVEN", commit, checks };
-  return { kind: "NOT PROVEN", commit, halt, checks };
+  const { commit, halt, scenario, prText, runs, baseline } = input;
+  const checks = scenario ? outcomesOf(scenario, runs) : [];
+  // A halted run is unfinished, so whatever else it lacks follows from the halt.
+  if (halt) return { kind: "NOT PROVEN", commit, checks, blockers: [{ reason: "halted", halt }] };
+
+  const blockers: Blocker[] = [];
+  const unaccounted = scenario ? uncoveredSentences(scenario, prText) : sentencesOf(prText);
+  if (unaccounted.length) blockers.push({ reason: "unaccounted_sentences", sentences: unaccounted });
+  const passed = checks.filter(isPassed);
+  const failsBefore = scenario ? firstFailureBefore(scenario, baseline) : null;
+  if (passed.length < checks.length) blockers.push({ reason: "check_did_not_pass" });
+  else if (!failsBefore) blockers.push({ reason: "no_check_fails_before" });
+
+  if (blockers.length || !failsBefore || commit === null) return { kind: "NOT PROVEN", commit, checks, blockers };
+  return { kind: "PROVEN", commit, checks: passed, failsBefore };
 }
