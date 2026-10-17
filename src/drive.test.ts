@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { createServer, type AddressInfo } from "node:net";
+import { cp, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright";
-import { DEMO_TODO, loadCase, preflight, prepareApp, withApp, type Repo } from "./app.ts";
+import { DEMO_TODO, loadCase, preflight, prepareApp, withApp, type Repo, type RunningApp } from "./app.ts";
 import { lookAtApp, rehearseCheck, runCheck } from "./drive.ts";
 import { ScenarioSchema, checksOf, freeze, type FrozenScenario } from "./scenario.ts";
 import { decide, type CheckRun, type Evidence, type Outcome, type Verdict } from "./verdict.ts";
@@ -43,6 +43,24 @@ function fixture(name: string): FrozenScenario {
 
 const never = new AbortController().signal;
 
+/** A copy of the demo app with some files edited, for an app that misbehaves in the browser. */
+async function patchedApp(name: string, edits: Record<string, (text: string) => string>): Promise<string> {
+  const dir = join(tmp, name);
+  await cp(APP_DIR, dir, { recursive: true });
+  for (const [file, edit] of Object.entries(edits)) {
+    const original = await readFile(join(dir, file), "utf8");
+    const edited = edit(original);
+    assert.notEqual(edited, original, `${name}: the edit to ${file} applies`);
+    await writeFile(join(dir, file), edited);
+  }
+  return dir;
+}
+
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  return (server.address() as AddressInfo).port;
+}
+
 async function verify(fixtureName: string, caseName: CaseName): Promise<{ verdict: Verdict; runs: CheckRun[] }> {
   const scenario = fixture(fixtureName);
   const repo = repos[caseName].new;
@@ -50,7 +68,7 @@ async function verify(fixtureName: string, caseName: CaseName): Promise<{ verdic
   const runs: CheckRun[] = [];
   for (const check of checksOf(scenario)) {
     runs.push(await withApp(repo.dir, DEMO_TODO, { runId, check: check.id }, never, (app) =>
-      runCheck(browser, app, check, join(tmp, "runs", runId, check.id))));
+      runCheck(browser, app, check, join(tmp, "runs", runId, check.id), never)));
   }
   return { verdict: decide({ commit: repo.commit, halt: null, scenario, prText: PR_TEXT, runs, baseline: [] }), runs };
 }
@@ -124,7 +142,7 @@ test("vacuous plan: could not run on delete-bug, because the effect rule sees no
 
 test("lookAtApp returns the start page's ARIA snapshot and the HTML and JS it loaded", async () => {
   const ui = await withApp(repos["delete-correct"].new.dir, DEMO_TODO, { runId: `look-${process.pid}`, check: "look" }, never, (app) =>
-    lookAtApp(browser, app));
+    lookAtApp(browser, app, never));
   assert.match(ui.ariaSnapshot, /button "Add task"/);
   assert.deepEqual(ui.files.map((f) => new URL(f.url).pathname), ["/", "/app.js"]);
   assert.match(ui.files[1].text, /function removeTask/);
@@ -133,13 +151,12 @@ test("lookAtApp returns the start page's ARIA snapshot and the HTML and JS it lo
 
 test("an app that stopped answering gives could not run at step 1, with the video and trace still saved", async () => {
   const server = createServer();
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  const { port } = server.address() as AddressInfo;
+  const port = await listen(server);
   await new Promise((done) => server.close(done));
   const origin = `http://127.0.0.1:${port}`;
   const app = { origin, startUrl: `${origin}/`, alive: async () => false, logs: async () => "exited with code 1" };
   const check = checksOf(fixture("good"))[0];
-  const run = await runCheck(browser, app, check, join(tmp, "runs", "dead-app", check.id));
+  const run = await runCheck(browser, app, check, join(tmp, "runs", "dead-app", check.id), never);
   const [first, ...rest] = run.steps;
   assert.ok(first.status === "could_not_run", JSON.stringify(first));
   assert.equal(first.cause, "app_down");
@@ -152,7 +169,7 @@ test("rehearsal on the old app passes every good check and stops the check with 
   const rehearse = (scenario: FrozenScenario, checkId: string) => {
     const check = checksOf(scenario).find((c) => c.id === checkId)!;
     return withApp(repos["delete-correct"].old.dir, DEMO_TODO, { runId: `rehearse-${process.pid}`, check: checkId }, never, (app) =>
-      rehearseCheck(browser, app, check));
+      rehearseCheck(browser, app, check, never));
   };
   const good = fixture("good");
   for (const check of checksOf(good)) assert.equal(await rehearse(good, check.id), null, check.id);
@@ -160,4 +177,47 @@ test("rehearsal on the old app passes every good check and stops the check with 
     await rehearse(fixture("no-setup"), "c2.1"),
     'when step 1 click button "Delete Walk dog": nothing matched its target before the "when" steps',
   );
+});
+
+test("a page stuck in a loop ends its step as could not run (page hung) within the deadline, and skips the rest", { timeout: 90_000 }, async (t) => {
+  const dir = await patchedApp("loops-on-delete", {
+    "public/app.js": (js) => js.replace("function askDelete(task) {", "function askDelete(task) {\n  while (true) {}"),
+  });
+  const check = checksOf(fixture("good"))[0];
+  const started = performance.now();
+  const run = await withApp(dir, DEMO_TODO, { runId: `hung-${process.pid}`, check: check.id }, never, (app) =>
+    runCheck(browser, app, check, join(tmp, "runs", "hung", check.id), never));
+  const elapsed = Math.round(performance.now() - started);
+  t.diagnostic(`returned in ${elapsed} ms`);
+  assert.ok(elapsed < 40_000, `returned in ${elapsed} ms`);
+  assert.deepEqual(run.steps.map((step) => step.status), [...Array(5).fill("passed"), "could_not_run", "skipped", "skipped"]);
+  const hung = run.steps[5];
+  assert.ok(hung.status === "could_not_run");
+  assert.equal(hung.cause, "page_hung");
+  assert.equal(hung.detail, "the step did not finish in 20 s; the page may be stuck in a loop");
+});
+
+test("stopping the run while the page is stuck makes lookAtApp, rehearseCheck and runCheck reject at once", { timeout: 90_000 }, async (t) => {
+  const dir = await patchedApp("loops-on-load", { "public/app.js": (js) => `${js}\nwhile (true) {}\n` });
+  const check = checksOf(fixture("good"))[0];
+  const drivers: Record<string, (app: RunningApp, signal: AbortSignal) => Promise<unknown>> = {
+    lookAtApp: (app, signal) => lookAtApp(browser, app, signal),
+    rehearseCheck: (app, signal) => rehearseCheck(browser, app, check, signal),
+    runCheck: (app, signal) => runCheck(browser, app, check, join(tmp, "runs", "stopped", check.id), signal),
+  };
+  for (const [name, drive] of Object.entries(drivers)) {
+    const controller = new AbortController();
+    let stoppedAt = 0;
+    const running = withApp(dir, DEMO_TODO, { runId: `stop-${process.pid}`, check: name }, controller.signal, (app) => {
+      setTimeout(() => {
+        stoppedAt = performance.now();
+        controller.abort();
+      }, 3_000);
+      return drive(app, controller.signal);
+    });
+    await assert.rejects(running, { name: "AbortError" }, name);
+    const took = Math.round(performance.now() - stoppedAt);
+    t.diagnostic(`${name} rejected ${took} ms after the stop`);
+    assert.ok(took < 3_000, `${name} rejected ${took} ms after the stop`);
+  }
 });

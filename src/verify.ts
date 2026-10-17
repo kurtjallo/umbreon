@@ -112,7 +112,7 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
       signal.throwIfAborted();
       let input: PlannerInput;
       try {
-        const ui = await withApp(prepared.new.dir, DEMO_TODO, { runId, check: "look" }, signal, (app) => lookAtApp(browser, app));
+        const ui = await withApp(prepared.new.dir, DEMO_TODO, { runId, check: "look" }, signal, (app) => lookAtApp(browser, app, signal));
         input = { prText: c.prText, diff: prepared.diff, ui };
         log(`look: ${ui.files.length} files${ui.truncated ? ", cut short" : ""}`);
       } catch (error) {
@@ -144,7 +144,7 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
         for (const check of checks) {
           signal.throwIfAborted();
           const problem = await withApp(prepared.old.dir, DEMO_TODO, { runId, check: `rehearse-${check.id}` }, signal,
-            (app) => rehearseCheck(browser, app, check)).catch((error) => {
+            (app) => rehearseCheck(browser, app, check, signal)).catch((error) => {
             if (signal.aborted) throw error;
             return error instanceof AppNeverReady ? "the app before this change never answered" : firstLine(error);
           });
@@ -176,7 +176,7 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
       const runOn = async (repoDir: string, check: NumberedCheck, name: string, evidenceDir: string): Promise<CheckRun | null> => {
         signal.throwIfAborted();
         try {
-          const run = await withApp(repoDir, DEMO_TODO, { runId, check: name }, signal, (app) => runCheck(browser, app, check, evidenceDir));
+          const run = await withApp(repoDir, DEMO_TODO, { runId, check: name }, signal, (app) => runCheck(browser, app, check, evidenceDir, signal));
           log(`${stage} ${check.id}: ${resultOf(run)}`);
           return run;
         } catch (error) {

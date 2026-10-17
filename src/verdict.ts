@@ -1,7 +1,7 @@
 import { checksOf, sentencesOf, stepsOf, uncoveredSentences, type Check, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
 
 export type Evidence = { state: "captured"; file: string } | { state: "missing"; reason: string } | { state: "not_requested" };
-export type Cause = "no_match" | "ambiguous" | "not_actionable" | "setup_failed" | "gone_rule" | "effect_rule" | "app_down" | "browser_error";
+export type Cause = "no_match" | "ambiguous" | "not_actionable" | "setup_failed" | "gone_rule" | "effect_rule" | "app_down" | "browser_error" | "page_hung";
 
 type At = { index: number; atMs: number; screenshot: Evidence };
 export type FailedStep = At & { status: "failed"; expected: string; observed: string; aria: Evidence };

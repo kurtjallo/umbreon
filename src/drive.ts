@@ -15,21 +15,25 @@ const POLL_MS = 100;
 const QUIET_MS = 300;
 const SETTLE_CAP_MS = 5_000;
 const EVIDENCE_MS = 5_000;
+const STEP_MS = 20_000;
 const LOOK_CAP_CHARS = 120 * 1024;
 
 type Problem =
   | { status: "failed"; expected: string; observed: string }
   | { status: "could_not_run"; cause: Cause; detail: string };
 type Observation = { holds: boolean; expected: string; observed: string };
-type Session = { context: BrowserContext; page: Page; app: RunningApp; inFlight(): number; died(): boolean };
+type Session = { context: BrowserContext; page: Page; app: RunningApp; signal: AbortSignal; inFlight(): number; died(): boolean };
 
 const cannot = (cause: Cause, detail: string): Problem => ({ status: "could_not_run", cause, detail });
+const hung = cannot("page_hung", `the step did not finish in ${STEP_MS / 1000} s; the page may be stuck in a loop`);
+const lost: Evidence = { state: "missing", reason: "the page hung" };
+const LATE = Symbol("late");
 const firstLine = (error: unknown) => String(error instanceof Error ? error.message : error).split("\n")[0];
 const matches = (n: number) => `${n} visible match${n === 1 ? "" : "es"}`;
 const quoted = (texts: readonly string[]) => (texts.length ? texts.map((text) => JSON.stringify(text)).join(", ") : "nothing");
 const textOf = (problem: Problem) => (problem.status === "failed" ? `expected ${problem.expected}, saw ${problem.observed}` : problem.detail);
 
-async function openSession(browser: Browser, app: RunningApp, options: BrowserContextOptions = {}): Promise<Session> {
+async function openSession(browser: Browser, app: RunningApp, signal: AbortSignal, options: BrowserContextOptions = {}): Promise<Session> {
   const context = await browser.newContext({ viewport: VIEWPORT, ...options });
   const page = await context.newPage();
   let inFlight = 0;
@@ -38,7 +42,27 @@ async function openSession(browser: Browser, app: RunningApp, options: BrowserCo
   page.on("requestfinished", () => inFlight--);
   page.on("requestfailed", () => inFlight--);
   page.on("crash", () => { crashed = true; });
-  return { context, page, app, inFlight: () => inFlight, died: () => crashed || page.isClosed() || !browser.isConnected() };
+  return { context, page, app, signal, inFlight: () => inFlight, died: () => crashed || page.isClosed() || !browser.isConnected() };
+}
+
+/**
+ * Gives one step STEP_MS, and stops it at once when the run is stopped. Playwright's own timeouts never fire while
+ * the page's script is stuck in a loop, so both cases close the context, which makes every pending call reject.
+ */
+async function bounded<T>(s: Session, onHang: () => T, work: () => Promise<T>): Promise<T> {
+  const finished = new AbortController();
+  const late = sleep(STEP_MS, LATE, { signal: AbortSignal.any([s.signal, finished.signal]) });
+  try {
+    const result = await Promise.race([work(), late]);
+    if (result !== LATE) return result;
+  } catch (error) {
+    if (!s.signal.aborted) throw error;
+  } finally {
+    finished.abort();
+  }
+  await closeQuietly(s);
+  s.signal.throwIfAborted();
+  return onHang();
 }
 
 function within(scope: Page | Found, l: Locator): Found {
@@ -240,40 +264,47 @@ async function record(s: Session, dir: string, index: number, atMs: number, prob
 const closeQuietly = (s: Session) => s.context.close().catch(() => {});
 
 /** What the planner sees: the start page's ARIA snapshot and the same-origin HTML and JS the page loaded. */
-export async function lookAtApp(browser: Browser, app: RunningApp): Promise<UiReference> {
-  const s = await openSession(browser, app);
+export async function lookAtApp(browser: Browser, app: RunningApp, signal: AbortSignal): Promise<UiReference> {
+  const s = await openSession(browser, app, signal);
+  const onHang = () => {
+    throw new Error(`looking at the start page did not finish in ${STEP_MS / 1000} s; the page may be stuck in a loop`);
+  };
   try {
-    const origin = new URL(app.origin).origin;
-    const bodies: Promise<{ url: string; text: string } | null>[] = [];
-    s.page.on("response", (response) => {
-      if (new URL(response.url()).origin !== origin || !/html|javascript/.test(response.headers()["content-type"] ?? "")) return;
-      bodies.push(response.text().then((text) => ({ url: response.url(), text }), () => null));
-    });
-    await s.page.goto(app.startUrl, { timeout: GOTO_MS });
-    await settle(s);
-    const ariaSnapshot = await s.page.locator("body").ariaSnapshot();
-    const loaded = (await Promise.all(bodies)).filter((file) => file !== null).sort((a, b) => a.url.localeCompare(b.url));
-    let room = LOOK_CAP_CHARS;
-    let truncated = false;
-    const files: UiReference["files"] = [];
-    for (const file of loaded) {
-      const text = file.text.slice(0, room);
-      if (text) files.push({ url: file.url, text });
-      room -= text.length;
-      truncated = text.length < file.text.length;
-      if (truncated) break;
-    }
-    return { ariaSnapshot, files, truncated };
+    return await bounded(s, onHang, () => look(s));
   } finally {
     await closeQuietly(s);
   }
 }
 
+async function look(s: Session): Promise<UiReference> {
+  const origin = new URL(s.app.origin).origin;
+  const bodies: Promise<{ url: string; text: string } | null>[] = [];
+  s.page.on("response", (response) => {
+    if (new URL(response.url()).origin !== origin || !/html|javascript/.test(response.headers()["content-type"] ?? "")) return;
+    bodies.push(response.text().then((text) => ({ url: response.url(), text }), () => null));
+  });
+  await s.page.goto(s.app.startUrl, { timeout: GOTO_MS });
+  await settle(s);
+  const ariaSnapshot = await s.page.locator("body").ariaSnapshot();
+  const loaded = (await Promise.all(bodies)).filter((file) => file !== null).sort((a, b) => a.url.localeCompare(b.url));
+  let room = LOOK_CAP_CHARS;
+  let truncated = false;
+  const files: UiReference["files"] = [];
+  for (const file of loaded) {
+    const text = file.text.slice(0, room);
+    if (text) files.push({ url: file.url, text });
+    room -= text.length;
+    truncated = text.length < file.text.length;
+    if (truncated) break;
+  }
+  return { ariaSnapshot, files, truncated };
+}
+
 /** Runs one frozen check on a fresh browser context and records every step, with evidence, into `dir`. */
-export async function runCheck(browser: Browser, app: RunningApp, check: NumberedCheck, dir: string): Promise<CheckRun> {
+export async function runCheck(browser: Browser, app: RunningApp, check: NumberedCheck, dir: string, signal: AbortSignal): Promise<CheckRun> {
   const out = resolve(dir);
   await mkdir(out, { recursive: true });
-  const s = await openSession(browser, app, { recordVideo: { dir: out } });
+  const s = await openSession(browser, app, signal, { recordVideo: { dir: out } });
   // The video starts with the page, so atMs is also the offset into the video.
   const startedAt = Date.now();
   try {
@@ -286,12 +317,15 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
         steps.push({ status: "skipped", index });
         continue;
       }
-      const problem = await guarded(s, async () =>
-        (index === 0 ? await openStart(s) : null)
-        ?? (index === whenAt ? await rulesBeforeWhen(s, check, false) : null)
-        ?? await runStep(s, step, phaseOf(check, index)));
-      steps.push(await record(s, out, index, Date.now() - startedAt, problem));
-      stopped = problem !== null;
+      const result = await bounded(s, (): StepResult => ({ ...hung, index, atMs: Date.now() - startedAt, screenshot: lost, aria: lost }), async () => {
+        const problem = await guarded(s, async () =>
+          (index === 0 ? await openStart(s) : null)
+          ?? (index === whenAt ? await rulesBeforeWhen(s, check, false) : null)
+          ?? await runStep(s, step, phaseOf(check, index)));
+        return record(s, out, index, Date.now() - startedAt, problem);
+      });
+      steps.push(result);
+      stopped = result.status !== "passed";
     }
     const trace: Evidence = traceFailure === null
       ? await capture(join(out, "trace.zip"), (path) => s.context.tracing.stop({ path }))
@@ -313,16 +347,17 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
  * Runs a check's `given` on the old app, then the rules checked before `when`, and stops there.
  * Returns null when all of it holds, or one line for the repair prompt saying what failed and what the screen showed.
  */
-export async function rehearseCheck(browser: Browser, app: RunningApp, check: Check): Promise<string | null> {
-  const s = await openSession(browser, app);
+export async function rehearseCheck(browser: Browser, app: RunningApp, check: Check, signal: AbortSignal): Promise<string | null> {
+  const s = await openSession(browser, app, signal);
+  const step = (work: () => Promise<Problem | null>) => bounded(s, () => hung, () => guarded(s, work));
   try {
-    const start = await guarded(s, () => openStart(s));
+    const start = await step(() => openStart(s));
     if (start) return `the start page did not load: ${textOf(start)}`;
-    for (const [index, step] of check.given.entries()) {
-      const problem = await guarded(s, () => runStep(s, step, "given"));
+    for (const [index, given] of check.given.entries()) {
+      const problem = await step(() => runStep(s, given, "given"));
       if (problem) return `${stepName(check, index)}: ${textOf(problem)}`;
     }
-    const broken = await guarded(s, () => rulesBeforeWhen(s, check, true));
+    const broken = await step(() => rulesBeforeWhen(s, check, true));
     return broken ? textOf(broken) : null;
   } finally {
     await closeQuietly(s);
