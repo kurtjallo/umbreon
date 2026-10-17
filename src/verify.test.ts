@@ -41,25 +41,27 @@ async function assertEvidence(record: RunRecord): Promise<void> {
   }
 }
 
-type Cli = { code: number | null; stdout: string; stderr: string };
+type Cli = { code: number | null; stdout: string; stderr: string; pid: number; record: RunRecord | null };
 
-/** Runs the CLI and removes the run folder it made under runs/. `interruptAfterMs` sends one SIGINT once the run has started. */
-async function cli(args: string[], interruptAfterMs?: number): Promise<Cli & { pid: number }> {
+/** Runs the CLI, reads its run.json, and removes the run folder it made under runs/. `interrupt` sends one signal once the run has started. */
+async function cli(args: string[], interrupt?: { signal: NodeJS.Signals; afterMs: number }): Promise<Cli> {
   const child = spawn(process.execPath, ["src/cli.ts", ...args], { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => (stdout += chunk));
   child.stderr.on("data", (chunk) => (stderr += chunk));
   const exited = once(child, "exit");
-  if (interruptAfterMs !== undefined) {
+  if (interrupt) {
     const started = new Promise<void>((done) => child.stderr.on("data", () => /^run /m.test(stderr) && done()));
-    await Promise.all([sleep(interruptAfterMs), started]);
-    child.kill("SIGINT");
+    await Promise.all([sleep(interrupt.afterMs), started]);
+    child.kill(interrupt.signal);
   }
   const [code] = (await exited) as [number | null];
   const runId = /^run (\S+)$/m.exec(stderr)?.[1];
-  if (runId) await rm(join(REPO, "runs", runId), { recursive: true, force: true });
-  return { code, stdout, stderr, pid: child.pid! };
+  const runDir = runId ? join(REPO, "runs", runId) : null;
+  const record = runDir ? await readFile(join(runDir, "run.json"), "utf8").then((text): RunRecord => JSON.parse(text), () => null) : null;
+  if (runDir) await rm(runDir, { recursive: true, force: true });
+  return { code, stdout, stderr, pid: child.pid!, record };
 }
 
 suite("verify", { concurrency: 3 }, () => {
@@ -138,11 +140,19 @@ suite("verify", { concurrency: 3 }, () => {
     assert.match(result.stderr, /is not a case folder/);
   });
 
-  test("Ctrl-C stops the CLI with 130 and leaves no container behind", async () => {
-    const result = await cli(["verify", caseDir("delete-correct"), "--scenario", fixture("good")], 3_000);
-    assert.equal(result.code, 130, result.stderr);
-    assert.match(result.stdout, /Stopped: interrupted\./);
-    const { stdout } = await exec("docker", ["ps", "-a", "--filter", `label=umbreon.owner=${result.pid}`, "--format", "{{.Names}}"]);
-    assert.equal(stdout.trim(), "");
-  });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    test(`${signal} stops the CLI with 130, records the run as interrupted, and leaves no container or network behind`, async () => {
+      const result = await cli(["verify", caseDir("delete-correct"), "--scenario", fixture("good")], { signal, afterMs: 3_000 });
+      assert.equal(result.code, 130, result.stderr);
+      assert.match(result.stdout, /Stopped: interrupted\./);
+      const verdict = result.record?.verdict;
+      assert.ok(verdict?.kind === "NOT PROVEN", JSON.stringify(verdict));
+      const [blocker] = verdict.blockers;
+      assert.ok(blocker.reason === "halted" && blocker.halt.reason === "interrupted", JSON.stringify(blocker));
+      for (const list of [["ps", "-a"], ["network", "ls"]]) {
+        const { stdout } = await exec("docker", [...list, "--quiet", "--filter", `label=umbreon.owner=${result.pid}`]);
+        assert.equal(stdout.trim(), "", `docker ${list.join(" ")}`);
+      }
+    });
+  }
 });

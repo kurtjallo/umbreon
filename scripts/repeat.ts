@@ -107,8 +107,8 @@ async function main(): Promise<number> {
   return done.every((d) => d.kind === "right") ? 0 : 1;
 }
 
-// The default SIGINT exit skips the "exit" event, where Playwright kills its browsers.
-process.on("SIGINT", () => process.exit(130));
+// The default exit on these signals skips the "exit" event, where Playwright kills its browsers.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => process.exit(130));
 try {
   process.exitCode = await main();
 } catch (error) {

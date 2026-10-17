@@ -26,11 +26,13 @@ if (!args) {
   exit(2, USAGE, process.stderr);
 } else {
   const controller = new AbortController();
-  process.on("SIGINT", () => {
-    if (controller.signal.aborted) process.exit(130);
-    controller.abort();
-    process.stderr.write("Stopping after cleanup. Press Ctrl-C again to quit at once.\n");
-  });
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      if (controller.signal.aborted) process.exit(130);
+      controller.abort();
+      process.stderr.write("Stopping after cleanup. Press Ctrl-C again to quit at once.\n");
+    });
+  }
   try {
     const plan: PlanChoice = args.scenario ? { kind: "file", path: args.scenario } : { kind: "model", model: await plannerModel() };
     const record = await verify(args.caseDir, { plan, signal: controller.signal, log: (line) => process.stderr.write(`${line}\n`) });

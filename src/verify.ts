@@ -105,8 +105,9 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
     commit = prepared.new.commit;
     log(`repo: old ${short(base)}, changed ${short(commit)}`);
 
-    // Playwright's own SIGINT handler exits the process before the containers are removed and the record is written.
-    const browser = await chromium.launch({ handleSIGINT: false });
+    // Playwright's own signal handlers close the browser mid-run, and its SIGINT handler then exits the process,
+    // before the containers are removed and the record is written.
+    const browser = await chromium.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
     try {
       stage = "look";
       signal.throwIfAborted();
