@@ -18,14 +18,26 @@ test("every fixture parses and breaks no plan rule, so only running the app can 
   for (const name of FIXTURES) assert.deepEqual(planProblems(fixture(name), prText), [], name);
 });
 
-test("sentencesOf splits the real PR text into its five sentences and drops the title", () => {
-  assert.deepEqual(sentencesOf(prText), [
-    "After you delete a task, focus used to jump to the task list box, so keyboard users had to tab back to where they were.",
-    "Now focus moves to the Delete button of the next task.",
-    "If you deleted the last task in the list, it moves to the previous task instead.",
-    "If the list is now empty, focus goes to the task list box as before.",
-    "Delete still removes only the task you clicked.",
-  ]);
+test("sentencesOf splits each practice PR into its five sentences and drops the title", () => {
+  for (const name of ["delete-correct", "delete-bug"]) {
+    assert.deepEqual(sentencesOf(readFileSync(new URL(`practice/demo-todo/prs/${name}/pr.md`, root), "utf8")), [
+      "After you delete a task, focus used to jump to the task list box, so keyboard users had to tab back to where they were.",
+      "Now focus moves to the Delete button of the next task.",
+      "If you deleted the last task in the list, it moves to the previous task instead.",
+      "If the list is now empty, focus goes to the task list box as before.",
+      "Delete still removes only the task you clicked.",
+    ], name);
+  }
+});
+
+test("a PR with text too short to quote, or a repeated sentence, still gets a valid plan", () => {
+  const github = `${prText}\n## Changes\n\n- Docs\n\n## Testing\n\nN/A\n`;
+  assert.deepEqual(sentencesOf(github), sentencesOf(prText));
+  assert.deepEqual(planProblems(fixture("good"), github), []);
+
+  const repeated = `${prText}\nDelete still removes only the task you clicked.\n`;
+  assert.deepEqual(sentencesOf(repeated), sentencesOf(prText));
+  assert.deepEqual(planProblems(fixture("good"), repeated), []);
 });
 
 test("sentencesOf reads GitHub's usual layout: headings dropped, each list item its own sentence", () => {

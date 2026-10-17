@@ -42,7 +42,8 @@ export const CheckSchema = z.strictObject({
   when: z.array(ActionSchema).min(1).max(10),
   then: z.array(AssertionSchema).min(1).max(10),
 });
-const Quote = z.string().min(8).max(400);
+const MIN_QUOTE = 8;
+const Quote = z.string().min(MIN_QUOTE).max(400);
 export const ClaimSchema = z.strictObject({ quote: Quote, it: It, checks: z.array(CheckSchema).min(1).max(3) });
 export const NotTestableSchema = z.strictObject({ quote: Quote, reason: Text });
 export const ScenarioSchema = z.strictObject({
@@ -80,14 +81,18 @@ const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const HEADING = /^ {0,3}#{1,6}(\s|$)/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+\.)\s+/;
 
-/** Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space. Headings are dropped. */
+/**
+ * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space. Headings are dropped.
+ * So is a sentence shorter than any quote, like "N/A", and a repeated sentence counts once, because a plan could
+ * never quote either one alone.
+ */
 export function sentencesOf(prText: string): string[] {
-  return prText.split("\n")
+  return [...new Set(prText.split("\n")
     .map((line) => (HEADING.test(line) ? "" : line.replace(LIST_ITEM, "\n\n")))
     .join("\n")
     .split(/\n\s*\n/)
     .flatMap((unit) => normalize(unit).split(/(?<=[.!?])\s+/))
-    .filter(Boolean);
+    .filter((sentence) => sentence.length >= MIN_QUOTE))];
 }
 
 function sentencesContaining(quote: string, prText: string): number[] {
