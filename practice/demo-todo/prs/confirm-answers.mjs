@@ -10,13 +10,8 @@ import { chromium } from "@playwright/test";
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const APP_FILES = ["server.js", "package.json", "playwright.config.js", "public", "tests"];
-const CASES = ["delete-correct", "delete-bug"];
+const CASES = ["delete-correct", "delete-bug", "clear-completed-correct", "clear-completed-bug"];
 const ORIGIN = "http://127.0.0.1:4180";
-const WANT = {
-  screen: '["Buy milk"]',
-  api: '["Buy milk"]',
-  focus: '- button "Delete Buy milk": Delete',
-};
 
 const run = promisify(execFile);
 
@@ -51,25 +46,53 @@ async function addTask(page, title) {
   await page.getByRole("listitem").filter({ hasText: title }).waitFor();
 }
 
-async function exam(page) {
+async function openWithTasks(page, titles) {
   await page.goto(ORIGIN);
   await page.getByText("No tasks yet. Add your first task above.", { exact: true }).waitFor();
-  await addTask(page, "Buy milk");
-  await addTask(page, "Walk dog");
-  await page.getByRole("button", { name: "Delete Walk dog", exact: true }).click();
-  await page.getByRole("dialog", { name: "Delete task?", exact: true }).getByRole("button", { name: "Delete", exact: true }).click();
-  await page.getByRole("status").filter({ hasText: "Task deleted." }).waitFor();
+  for (const title of titles) await addTask(page, title);
+}
 
+async function titleFacts(page) {
   const { tasks } = await (await fetch(`${ORIGIN}/api/tasks`)).json();
-  const focused = page.locator(":focus");
   return {
     screen: JSON.stringify(await page.locator(".task-title").allTextContents()),
     api: JSON.stringify(tasks.map((task) => task.title)),
-    focus: (await focused.count()) === 1 ? await focused.ariaSnapshot() : "nothing focused",
   };
 }
 
-async function runCase(name) {
+const EXAMS = {
+  delete: {
+    want: { screen: '["Buy milk"]', api: '["Buy milk"]', focus: '- button "Delete Buy milk": Delete' },
+    async run(page) {
+      await openWithTasks(page, ["Buy milk", "Walk dog"]);
+      await page.getByRole("button", { name: "Delete Walk dog", exact: true }).click();
+      await page.getByRole("dialog", { name: "Delete task?", exact: true }).getByRole("button", { name: "Delete", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "Task deleted." }).waitFor();
+
+      const focused = page.locator(":focus");
+      return {
+        ...(await titleFacts(page)),
+        focus: (await focused.count()) === 1 ? await focused.ariaSnapshot() : "nothing focused",
+      };
+    },
+  },
+  "clear-completed": {
+    want: { screen: '["Walk dog"]', api: '["Walk dog"]', clearButton: "gone" },
+    async run(page) {
+      await openWithTasks(page, ["Buy milk", "Walk dog", "Pay rent"]);
+      await page.getByRole("checkbox", { name: "Buy milk", exact: true }).check();
+      await page.getByRole("checkbox", { name: "Pay rent", exact: true }).check();
+      await page.getByText("2 of 3 done", { exact: true }).waitFor();
+      const clear = page.getByRole("button", { name: "Clear completed", exact: true });
+      await clear.click();
+      await page.getByRole("status").filter({ hasText: "Completed tasks cleared." }).waitFor();
+
+      return { ...(await titleFacts(page)), clearButton: (await clear.isVisible()) ? "visible" : "gone" };
+    },
+  },
+};
+
+async function runCase(name, exam) {
   const dir = await mkdtemp(path.join(os.tmpdir(), `demo-todo-${name}-`));
   try {
     await copyApp(name, dir);
@@ -84,7 +107,7 @@ async function runCase(name) {
       await waitForServer(server);
       const browser = await chromium.launch();
       try {
-        return { ...tests, facts: await exam(await browser.newPage()) };
+        return { ...tests, facts: await exam.run(await browser.newPage()) };
       } finally {
         await browser.close();
       }
@@ -99,15 +122,16 @@ async function runCase(name) {
 
 let allMatch = true;
 for (const name of CASES) {
-  const { testsPassed, testOutput, facts } = await runCase(name);
+  const exam = EXAMS[name.replace(/-(correct|bug)$/, "")];
+  const { testsPassed, testOutput, facts } = await runCase(name, exam);
   const { verdict: expected } = JSON.parse(await readFile(path.join(APP_ROOT, "prs", name, "expected.json"), "utf8"));
-  const failed = Object.keys(WANT).filter((fact) => facts[fact] !== WANT[fact]);
+  const failed = Object.keys(exam.want).filter((fact) => facts[fact] !== exam.want[fact]);
   const got = failed.length === 0 ? "PROVEN" : "NOT PROVEN";
   const match = testsPassed && got === expected;
   allMatch &&= match;
 
   console.log(
-    name.padEnd(17) +
+    name.padEnd(25) +
       `app tests: ${testsPassed ? "pass" : "fail"}`.padEnd(18) +
       `expected: ${expected}`.padEnd(23) +
       `got: ${got}`.padEnd(18) +

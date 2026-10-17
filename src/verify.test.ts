@@ -16,6 +16,7 @@ const exec = promisify(execFile);
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const caseDir = (name: string) => join(REPO, "practice/demo-todo/prs", name);
 const fixture = (name: string) => join(REPO, `scripts/fixtures/demo-todo-${name}.json`);
+const CLEAR_PLAN = join(REPO, "scripts/fixtures/clear-completed-good.json");
 
 let runsDir = "";
 before(async () => {
@@ -83,6 +84,13 @@ suite("verify", { concurrency: 3 }, () => {
     assert.ok(record.verdict.checks.some((outcome) => outcome.result === "failed"), "some check failed");
     assert.deepEqual(record.baseline, [], "the old app is not run once a check fails");
     await assertEvidence(record);
+  });
+
+  test("the clear-completed plan catches clear-completed-bug with failed checks", async () => {
+    const record = await verify(caseDir("clear-completed-bug"), { plan: { kind: "file", path: CLEAR_PLAN }, runsDir });
+    assert.ok(record.verdict.kind === "NOT PROVEN");
+    assert.deepEqual(record.verdict.blockers, [{ reason: "check_did_not_pass" }]);
+    assert.ok(record.verdict.checks.some((outcome) => outcome.result === "failed"), "some check failed");
   });
 
   test("the vacuous plan never proves delete-bug", async () => {

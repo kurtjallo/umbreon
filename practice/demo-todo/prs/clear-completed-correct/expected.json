@@ -1,0 +1,4 @@
+{
+  "verdict": "PROVEN",
+  "because": "With \"Buy milk\" and \"Pay rent\" completed and \"Walk dog\" not, Clear completed removes the two completed tasks and leaves only \"Walk dog\"."
+}
