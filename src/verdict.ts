@@ -94,15 +94,12 @@ export function outcomesOf(scenario: Scenario, runs: readonly CheckRun[]): Outco
 type Stopped = { index: number } & ({ status: "failed" } | { status: "could_not_run"; cause: Cause });
 
 /**
- * Whether a step that stopped a check on the app before the change shows that app lacks what the change adds: a failed
- * "then" step, or a "when" or "then" step with nothing to act on. A setup step with nothing to act on shows only that
- * the check could not run there, as when the change renames a field the setup fills, and so does every other cause.
- * Rehearsal and the baseline share this rule, so rehearsal keeps unrepaired only a check the baseline could credit.
+ * Whether a step that stopped a check on the app before the change shows the behavior differed: a "then" assertion
+ * that ran and failed. A missing target does not. A new control and a renamed field miss the same way, and crediting
+ * the miss let a rename prove a promise the old app already kept.
  */
 export function showsChangeAdds(check: Check, step: Stopped): boolean {
-  return step.status === "failed"
-    ? step.index >= check.given.length + check.when.length
-    : step.cause === "no_match" && step.index >= check.given.length;
+  return step.status === "failed" && step.index >= check.given.length + check.when.length;
 }
 
 /** The first step that did not pass, when it shows the app before the change lacks what the change adds. */

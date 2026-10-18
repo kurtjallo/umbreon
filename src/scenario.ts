@@ -84,16 +84,43 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+\.)\s+/;
 
 /**
  * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space. Headings are dropped.
- * Every other sentence counts, however short, because a one-word bullet like "Undo" can be a promise. A repeated
- * sentence counts once, because a plan could never quote it alone.
+ * A list item ends before the next line that is not indented under it, so "- Undo" is not glued to the sentence below.
+ * A one-word unit counts, because "Undo" can be a promise. A piece shorter than 8 characters counts only when it is the
+ * whole unit, so a cut such as "e.g." is dropped and "N/A" is kept. A repeated sentence counts once.
  */
 export function sentencesOf(prText: string): string[] {
-  return [...new Set(prText.split("\n")
-    .map((line) => (HEADING.test(line) ? "" : line.replace(LIST_ITEM, "\n\n")))
-    .join("\n")
-    .split(/\n\s*\n/)
-    .flatMap((unit) => normalize(unit).split(/(?<=[.!?])\s+/))
-    .filter(Boolean))];
+  const units: string[] = [];
+  let buf: string[] = [];
+  let kind: "list" | "prose" | null = null;
+  const flush = () => {
+    const text = normalize(buf.join(" "));
+    buf = [];
+    kind = null;
+    if (!text) return;
+    const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+    units.push(...(parts.length === 1 ? parts : parts.filter((part) => part.length >= SHORT_QUOTE)));
+  };
+  for (const line of prText.split("\n")) {
+    if (HEADING.test(line) || line.trim() === "") {
+      flush();
+      continue;
+    }
+    if (LIST_ITEM.test(line)) {
+      flush();
+      buf = [line.replace(LIST_ITEM, "")];
+      kind = "list";
+      continue;
+    }
+    if (kind === "list" && /^[ \t]/.test(line)) {
+      buf.push(line);
+      continue;
+    }
+    if (kind === "list") flush();
+    buf.push(line);
+    kind = "prose";
+  }
+  flush();
+  return [...new Set(units)];
 }
 
 /**

@@ -161,12 +161,12 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
             const detail = error instanceof AppNeverReady ? `${apps[side].name} never answered` : `${apps[side].name} could not run: ${firstLine(error)}`;
             return { status: "could_not_run", cause: "app_down", detail, index: 0, text: detail };
           });
-      // A check whose old-app problem the baseline would credit, and which holds on the new app, uses something the
-      // change adds, so it needs no repair. So does one that expects something the change adds to go away, which the
-      // old app never shows, so no repair could help; the baseline never credits that one. The new app can only stop a
-      // repair, never shape one, so the model sees only the old app's problem.
+      // Repair cannot fix a missing new control or an absence the old app never shows, so those checks are kept. Neither
+      // is proof. Proof is a "then" assertion that ran and failed. The new app can only stop a repair, never shape one.
       const addedByChange = (check: NumberedCheck, problem: RehearsalProblem) =>
-        showsChangeAdds(check, problem) || (problem.status === "could_not_run" && problem.cause === "gone_rule");
+        showsChangeAdds(check, problem)
+        || (problem.status === "could_not_run" && problem.cause === "gone_rule")
+        || (problem.status === "could_not_run" && problem.cause === "no_match" && problem.index >= check.given.length);
       const rehearse = async (checks: readonly NumberedCheck[]): Promise<FailingCheck[]> => {
         const failing: FailingCheck[] = [];
         for (const check of checks) {

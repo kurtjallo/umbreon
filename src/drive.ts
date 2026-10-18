@@ -228,19 +228,20 @@ const openStart = (s: Session) => act(s, null, () => s.page.goto(s.app.startUrl,
 /**
  * The code rules checked right before `when`. The gone rule: whatever `then` expects gone must be on screen now.
  * The effect rule: at least one `then` assertion must be false now, so the check can see what `when` changes.
- * The rehearsal also checks that the first `when` step's target is on screen.
+ * The first `when` target is checked before that, so a missing click is not hidden by an absence.
  */
-async function rulesBeforeWhen(s: Session, check: Check, rehearsal: boolean): Promise<Problem | null> {
+async function rulesBeforeWhen(s: Session, check: Check): Promise<Problem | null> {
   const whenAt = check.given.length;
   const thenAt = whenAt + check.when.length;
+  const first = check.when[0];
+  // Before the absence rule. An absent new control would hide a click the old app cannot make.
+  if (first.do !== "goto" && first.target && (await find(s.page, first.target).count()) === 0) {
+    return cannot("no_match", `${stepName(check, whenAt)}: nothing matched its target before the "when" steps`);
+  }
   for (const [i, a] of check.then.entries()) {
     if (isAbsence(a) && (await find(s.page, a.target).count()) === 0) {
       return cannot("gone_rule", `${stepName(check, thenAt + i)} expects something gone, but nothing matched it before the "when" steps, so its absence would prove nothing`);
     }
-  }
-  const first = check.when[0];
-  if (rehearsal && first.do !== "goto" && first.target && (await find(s.page, first.target).count()) === 0) {
-    return cannot("no_match", `${stepName(check, whenAt)}: nothing matched its target before the "when" steps`);
   }
   const held: string[] = [];
   for (const [i, a] of check.then.entries()) {
@@ -330,7 +331,7 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
       const result = await bounded(s, (): StepResult => ({ ...hung, index, atMs: Date.now() - startedAt, screenshot: lost, aria: lost }), async () => {
         const problem = await guarded(s, async () =>
           (index === 0 ? await openStart(s) : null)
-          ?? (index === whenAt ? await rulesBeforeWhen(s, check, false) : null)
+          ?? (index === whenAt ? await rulesBeforeWhen(s, check) : null)
           ?? await runStep(s, step, phaseOf(check, index)));
         return record(s, out, index, Date.now() - startedAt, problem);
       });
@@ -372,7 +373,7 @@ export async function rehearseCheck(browser: Browser, app: RunningApp, check: Ch
       const problem = await step(() => runStep(s, given, "given"));
       if (problem) return { ...problem, index, text: `${stepName(check, index)}: ${textOf(problem)}` };
     }
-    const broken = await step(() => rulesBeforeWhen(s, check, true));
+    const broken = await step(() => rulesBeforeWhen(s, check));
     return broken ? { ...broken, index: check.given.length, text: textOf(broken) } : null;
   } finally {
     await closeQuietly(s);

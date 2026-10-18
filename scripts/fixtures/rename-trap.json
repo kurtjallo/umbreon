@@ -1,0 +1,32 @@
+{
+  "claims": [
+    {
+      "quote": "Delete still removes only the task you clicked.",
+      "it": "It should remove only the task you clicked.",
+      "checks": [
+        {
+          "it": "It should add Pay rent with the renamed box.",
+          "given": [],
+          "when": [
+            { "do": "click", "target": { "by": "role", "role": "button", "name": "Add task" } },
+            { "do": "fill", "target": { "by": "label", "text": "Task name" }, "value": "Pay rent" },
+            { "do": "click", "target": { "by": "role", "role": "button", "name": "Add task" } }
+          ],
+          "then": [
+            {
+              "do": "expect_texts",
+              "target": { "by": "css", "selector": ".task-title" },
+              "texts": ["Pay rent"]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notTestable": [
+    { "quote": "After you delete a task, focus used to jump to the task list box, so keyboard users had to tab back to where they were.", "reason": "History: how focus behaved before this change." },
+    { "quote": "Now focus moves to the Delete button of the next task.", "reason": "The diff does not mention focus." },
+    { "quote": "If you deleted the last task in the list, it moves to the previous task instead.", "reason": "The diff does not mention focus." },
+    { "quote": "If the list is now empty, focus goes to the task list box as before.", "reason": "The diff does not mention focus." }
+  ]
+}

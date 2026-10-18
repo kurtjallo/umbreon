@@ -78,6 +78,20 @@ test("sentencesOf reads GitHub's usual layout: headings dropped, each list item 
   ]);
 });
 
+test("a one-word bullet stays its own sentence when the next line is not indented under it", () => {
+  const pr = "- Undo\nRestores a deleted task.\n";
+  const quote = (text: string) => ({ ...fixture("good").claims[0], quote: text });
+  assert.deepEqual(sentencesOf(pr), ["Undo", "Restores a deleted task."]);
+  assert.deepEqual(uncoveredSentences({ claims: [quote("Restores a deleted task.")], notTestable: [] }, pr), ["Undo"]);
+});
+
+test("a short piece cut on a period is dropped, and a short unit that was not cut is kept", () => {
+  assert.deepEqual(sentencesOf("Wait... undo is back."), ["undo is back."]);
+  assert.deepEqual(sentencesOf("e.g. focus stays put."), ["focus stays put."]);
+  assert.deepEqual(sentencesOf("N/A"), ["N/A"]);
+  assert.deepEqual(sentencesOf("- Undo"), ["Undo"]);
+});
+
 test("sentencesOf keeps bullets without full stops apart, in every list style", () => {
   assert.deepEqual(sentencesOf("Changes:\n- Removes the task\n* Moves focus next\n+ Keeps the list box\n1. Adds a test\n2. Fixes a typo\n   in the label"), [
     "Changes:",

@@ -1,0 +1,12 @@
+diff --git a/public/index.html b/public/index.html
+--- a/public/index.html
++++ b/public/index.html
+@@ -13,7 +13,7 @@
+ 
+     <form id="add-form" class="card add-form" aria-label="Add task" novalidate>
+       <div class="field">
+-        <label for="add-title">Title</label>
++        <label for="add-title">Task name</label>
+         <input id="add-title" type="text" maxlength="200" autocomplete="off" data-key="add-title">
+       </div>
+       <div class="field">

@@ -25,7 +25,7 @@ A check runs on a fresh, empty app that is already open on its start page.
 - "when" is the user action the claim is about.
 - "then" holds the assertions about the result. Expected values come from the PR text, never from what the code happens to do.
 
-Build "given" only from what the app had before this change. A step that uses or asserts something this change adds belongs in "when" (an action) or "then" (an assertion), never in "given".
+Build "given" and "when" from controls the app had before this change. A missing control is not proof. If this change renames a control, use the name from before the change. Put the proof in "then": an assertion that fails on the old app and passes on the new one, after actions that work on both. For a new control, assert that it is on screen.
 
 When a claim is about which item is affected ("only", "next", "previous", "other"), set up at least two items. Then a wrong item would show.
 

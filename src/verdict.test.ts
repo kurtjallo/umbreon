@@ -52,18 +52,16 @@ test("PROVEN when every check passed with its evidence and one check fails on th
   assert.deepEqual(verdict.failsBefore, { checkId: "c2.1", at: failed(lastIndex(c2)) });
 });
 
-test("PROVEN when a when or then step has nothing to act on before the change, because the change adds it", () => {
-  for (const [what, index] of [["when", c1.given.length], ["then", lastIndex(c1)]] as const) {
-    const at = couldNotRun(index, "no_match");
-    const verdict = verdictOf({ baseline: [stopAt(passingRun(c1), at)] });
-    assert.ok(verdict.kind === "PROVEN", what);
-    assert.deepEqual(verdict.failsBefore, { checkId: "c1.1", at }, what);
+test("NOT PROVEN when a when or then step has nothing to act on, because a renamed field misses the same way a new control does", () => {
+  for (const [what, index] of [["when", c1.given.length], ["a later when step", c1.given.length + 1], ["then", lastIndex(c1)]] as const) {
+    const verdict = verdictOf({ baseline: [stopAt(passingRun(c1), couldNotRun(index, "no_match"))] });
+    assert.deepEqual(blockersOf(verdict), [{ reason: "no_check_fails_before" }], what);
   }
 });
 
-test("showsChangeAdds, the rule rehearsal shares, holds for the same steps the baseline credits", () => {
+test("showsChangeAdds credits a then assertion that ran and failed, and never a missing target", () => {
   const whenAt = c1.given.length;
-  assert.equal(showsChangeAdds(c1, { status: "could_not_run", cause: "no_match", index: whenAt }), true);
+  assert.equal(showsChangeAdds(c1, { status: "could_not_run", cause: "no_match", index: whenAt }), false);
   assert.equal(showsChangeAdds(c1, { status: "failed", index: lastIndex(c1) }), true);
   assert.equal(showsChangeAdds(c1, { status: "could_not_run", cause: "no_match", index: whenAt - 1 }), false);
   for (const cause of ["setup_failed", "gone_rule", "effect_rule", "app_down"] as const) {

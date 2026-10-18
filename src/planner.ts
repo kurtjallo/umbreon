@@ -168,7 +168,7 @@ export async function repairChecks(
     `Return exactly ${failing.length} replacement checks, in the order listed. Each one replaces only the check it is listed for. `
       + `Every other check stays as it is. Fix the setup steps that failed. Never delete setup a check needs. `
       + `Each check needs at least one "then" assertion that is false right before its "when" action. `
-      + `A "when" or "then" step may use something this PR adds, so keep it. A "given" step must not: move such an action into "when" and such an assertion into "then". `
+      + `A missing target is not proof. Do not move a step onto a name this PR adds. If a step uses a control this PR renames, use the name from before the change. An assertion about a new control belongs in "then". `
       + `Expected values in "then" still come from the PR text only.`,
   ].join("\n\n");
   const reply = await ask(model, "prove-change", RepairSchema, prompt, signal);

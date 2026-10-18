@@ -111,6 +111,13 @@ suite("verify", { concurrency: 3 }, () => {
     await assertEvidence(record);
   });
 
+  test("a renamed field in a later action is not proof, even when the check passes on the changed app", async () => {
+    const record = await verify(caseDir("rename-only"), { plan: { kind: "file", path: join(REPO, "scripts/fixtures/rename-trap.json") }, runsDir });
+    assert.equal(record.verdict.kind, "NOT PROVEN");
+    assert.deepEqual(record.verdict.blockers, [{ reason: "no_check_fails_before" }]);
+    assert.ok(record.verdict.checks.every((outcome) => outcome.result === "passed"), JSON.stringify(record.verdict.checks));
+  });
+
   test("the clear-completed plan catches clear-completed-bug with failed checks", async () => {
     const record = await verify(caseDir("clear-completed-bug"), { plan: { kind: "file", path: CLEAR_PLAN }, runsDir });
     assert.ok(record.verdict.kind === "NOT PROVEN");
@@ -122,18 +129,18 @@ suite("verify", { concurrency: 3 }, () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
     const hides = { checks: [good.claims[2].checks[1]] };
     const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims: good.claims }, hides, hides);
-    for (const id of ["c1.1", "c2.1", "c3.1"]) {
+    for (const id of ["c1.2", "c2.1", "c3.1"]) {
       assert.ok(lines.some((line) => line.startsWith(`rehearse: ${id} needs something this change adds; kept (old app: no_match, when step 1 click button "Clear completed"`)), log);
     }
     assert.ok(lines.includes("rehearse: failing c3.2"), log);
     assert.equal(calls, 4, log);
     const setupFailed = '- c3.2 (claim 3, check 2): given step 4 expect_visible button "Clear completed": expected at least 1 visible match, saw 0 visible matches';
     assert.ok(userText(2).includes(setupFailed), userText(2));
-    assert.ok(!/^- c(1\.1|2\.1|3\.1) /m.test(userText(2)), userText(2));
+    assert.ok(!/^- c(1\.2|2\.1|3\.1) /m.test(userText(2)), userText(2));
     assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
     const { checkId, at } = record.verdict.failsBefore;
-    assert.ok(checkId === "c1.1" && at.status === "could_not_run" && at.cause === "no_match", JSON.stringify(record.verdict.failsBefore));
-    assert.equal(at.index, 9, "when step 1 clicks Clear completed");
+    assert.ok(checkId === "c1.1" && at.status === "failed", JSON.stringify(record.verdict.failsBefore));
+    assert.equal(at.index, 3, "then expects Clear completed after completing a task, which both apps can do");
   });
 
   test("a model plan whose check expects the button the PR adds to go away is kept with no repair, and never counts before the change", async () => {

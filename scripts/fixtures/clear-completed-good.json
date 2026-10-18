@@ -5,6 +5,32 @@
       "it": "It should remove every completed task with one click.",
       "checks": [
         {
+          "it": "It should show Clear completed once a task is completed.",
+          "given": [
+            {
+              "do": "fill",
+              "target": { "by": "label", "text": "Title" },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": { "by": "role", "role": "button", "name": "Add task" }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": { "by": "role", "role": "checkbox", "name": "Buy milk" }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_visible",
+              "target": { "by": "role", "role": "button", "name": "Clear completed" }
+            }
+          ]
+        },
+        {
           "it": "It should remove Buy milk and Pay rent, both completed, and leave Walk dog.",
           "given": [
             {
