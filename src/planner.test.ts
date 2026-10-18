@@ -69,9 +69,8 @@ test("sortSentences sees only the numbered sentences, with its own skill and sch
 test("sortProblems rejects a number out of range or listed twice, and passes a valid list", () => {
   assert.deepEqual(sortProblems({ notTestable: [{ sentence: 1, reason: HISTORY }] }, 5), []);
   assert.deepEqual(sortProblems({ notTestable: [] }, 5), []);
-  assert.deepEqual(sortProblems({ notTestable: [{ sentence: 6, reason: HISTORY }, { sentence: 0, reason: HISTORY }] }, 5), [
+  assert.deepEqual(sortProblems({ notTestable: [{ sentence: 6, reason: HISTORY }] }, 5), [
     "notTestable 1: there is no sentence 6; the sentences are numbered 1 to 5",
-    "notTestable 2: there is no sentence 0; the sentences are numbered 1 to 5",
   ]);
   assert.deepEqual(sortProblems({ notTestable: [{ sentence: 1, reason: HISTORY }, { sentence: 1, reason: "Motivation: why." }] }, 5), [
     "notTestable 2: sentence 1 is listed more than once; list each sentence once",
@@ -153,7 +152,7 @@ test("the review's dodge on delete-bug fails: only the sorter skips sentences, s
 test("planScenario retries once with the rule problems and accepts the second plan", async () => {
   const broken = good();
   broken.claims[0].quote = "Delete removes every task at once.";
-  const problem = planProblems(broken, input.prText)[0];
+  const problem = planProblems(broken, input.prText, "model")[0];
   const model = new MockLanguageModelV4({ doGenerate: [reply({ claims: broken.claims }), reply({ claims: good().claims })] });
   const result = await planScenario(input, good().notTestable, model, signal);
   assert.deepEqual(result, { ok: true, value: good(), calls: 2, usage: spent(2) });
@@ -173,7 +172,7 @@ test("planScenario gives up after two bad answers, shows the schema problems on 
   broken.claims[2].quote = "the task";
   const model = new MockLanguageModelV4({ doGenerate: [reply(noWhen), reply({ claims: broken.claims })] });
   const result = await planScenario(input, good().notTestable, model, signal);
-  assert.deepEqual(result, { ok: false, problems: planProblems(broken, input.prText), calls: 2, usage: spent(2) });
+  assert.deepEqual(result, { ok: false, problems: planProblems(broken, input.prText, "model"), calls: 2, usage: spent(2) });
   assert.ok(promptOf(model, 1).endsWith("Your last answer was rejected:\n- claims.0.checks.0.when: Too small: expected array to have >=1 items"), promptOf(model, 1));
 });
 

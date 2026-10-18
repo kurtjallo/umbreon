@@ -180,6 +180,23 @@ test("an app that crashes during the check makes the failed then step could not 
   assert.equal(failureBefore(check, run), null);
 });
 
+test("an app that crashes right after it answers ends the check as could not run (app down), though every assertion held", async () => {
+  const dir = await patchedApp("exits-after-delete", {
+    "server.js": (js) => js.replace("res.writeHead(204).end();", "res.writeHead(204).end(() => process.exit(1));"),
+  });
+  const check = checksOf(fixture("good"))[0];
+  const run = await withApp(dir, DEMO_TODO, { runId: `crash-after-${process.pid}`, check: check.id }, never, (app) =>
+    runCheck(browser, app, check, join(tmp, "runs", "crash-after", check.id), never));
+  assert.deepEqual(run.steps.map((step) => step.status), [...Array(7).fill("passed"), "could_not_run"]);
+  const last = run.steps[7];
+  assert.ok(last.status === "could_not_run", JSON.stringify(last));
+  assert.equal(last.cause, "app_down");
+  assert.equal(last.detail, "the app stopped running by the end of the check");
+  assert.ok(await onDisk(last.screenshot), "the last step's screenshot is kept");
+  assert.equal(last.aria.state, "missing");
+  assert.equal(failureBefore(check, run), null);
+});
+
 test("rehearsal on the old app passes every good check and stops the check with no setup", async () => {
   const rehearse = (scenario: FrozenScenario, checkId: string) => {
     const check = checksOf(scenario).find((c) => c.id === checkId)!;
@@ -188,10 +205,13 @@ test("rehearsal on the old app passes every good check and stops the check with 
   };
   const good = fixture("good");
   for (const check of checksOf(good)) assert.equal(await rehearse(good, check.id), null, check.id);
-  assert.equal(
-    await rehearse(fixture("no-setup"), "c2.1"),
-    'when step 1 click button "Delete Walk dog": nothing matched its target before the "when" steps',
-  );
+  const detail = 'when step 1 click button "Delete Walk dog": nothing matched its target before the "when" steps';
+  assert.deepEqual(await rehearse(fixture("no-setup"), "c2.1"), { status: "could_not_run", cause: "no_match", detail, index: 0, text: detail });
+  const edited = ScenarioSchema.parse(JSON.parse(readFileSync(new URL("../scripts/fixtures/demo-todo-good.json", import.meta.url), "utf8")));
+  edited.claims[0].checks[0].given[4] = { do: "expect_visible", target: { by: "text", text: "3 of 2 done" } };
+  const setup = await rehearse(freeze(edited, { kind: "file", path: "edited" }), "c1.1");
+  assert.ok(setup?.status === "could_not_run" && setup.cause === "setup_failed" && setup.index === 4, JSON.stringify(setup));
+  assert.equal(setup.text, 'given step 5 expect_visible text "3 of 2 done": expected at least 1 visible match, saw 0 visible matches');
 });
 
 test("a page stuck in a loop ends its step as could not run (page hung) within the deadline, and skips the rest", { timeout: 90_000 }, async (t) => {

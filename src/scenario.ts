@@ -42,8 +42,8 @@ export const CheckSchema = z.strictObject({
   when: z.array(ActionSchema).min(1).max(10),
   then: z.array(AssertionSchema).min(1).max(10),
 });
-const MIN_QUOTE = 8;
-const Quote = z.string().min(MIN_QUOTE).max(400);
+const SHORT_QUOTE = 8;
+const Quote = z.string().min(1).max(400);
 export const ClaimSchema = z.strictObject({ quote: Quote, it: It, checks: z.array(CheckSchema).min(1).max(3) });
 export const NotTestableSchema = z.strictObject({ quote: Quote, reason: Text });
 export const ScenarioSchema = z.strictObject({
@@ -84,8 +84,8 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+\.)\s+/;
 
 /**
  * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space. Headings are dropped.
- * So is a sentence shorter than any quote, like "N/A", and a repeated sentence counts once, because a plan could
- * never quote either one alone.
+ * Every other sentence counts, however short, because a one-word bullet like "Undo" can be a promise. A repeated
+ * sentence counts once, because a plan could never quote it alone.
  */
 export function sentencesOf(prText: string): string[] {
   return [...new Set(prText.split("\n")
@@ -93,15 +93,20 @@ export function sentencesOf(prText: string): string[] {
     .join("\n")
     .split(/\n\s*\n/)
     .flatMap((unit) => normalize(unit).split(/(?<=[.!?])\s+/))
-    .filter((sentence) => sentence.length >= MIN_QUOTE))];
+    .filter(Boolean))];
 }
 
-/** A quote that is a whole sentence picks that one, even when a longer sentence contains it too. */
+/**
+ * A quote that is a whole sentence picks that one, even when a longer sentence contains it too. A quote shorter than
+ * 8 characters picks only a sentence it equals, so "Undo" never stands for "Undo restores a deleted task."
+ */
 function sentencesContaining(quote: string, prText: string): number[] {
   const needle = normalize(quote);
   const sentences = sentencesOf(prText);
   const whole = sentences.indexOf(needle);
-  return whole !== -1 ? [whole] : sentences.flatMap((sentence, index) => (sentence.includes(needle) ? [index] : []));
+  if (whole !== -1) return [whole];
+  if (needle.length < SHORT_QUOTE) return [];
+  return sentences.flatMap((sentence, index) => (sentence.includes(needle) ? [index] : []));
 }
 
 /** The sentences these quotes pick out. A quote that matches no sentence, or several, picks out none. */
@@ -172,11 +177,16 @@ function locatorsOf(step: Step): Locator[] {
   return step.target.within ? [step.target, step.target.within] : [step.target];
 }
 
-export function planProblems(scenario: Scenario, prText: string): string[] {
+/** The advice differs by `source`, because only a plan file writes its own not-testable list; a model's comes from the sorter. */
+export function planProblems(scenario: Scenario, prText: string, source: PlanSource["kind"]): string[] {
   const problems: string[] = [];
   const checkQuote = (label: string, quote: string) => {
     const hits = sentencesContaining(quote, prText).length;
-    if (hits === 0) problems.push(`${label}: "quote" is not in any sentence of the PR text; copy it exactly from one sentence`);
+    if (hits === 0 && normalize(quote).length < SHORT_QUOTE) {
+      problems.push(`${label}: "quote" is shorter than ${SHORT_QUOTE} characters, so it must be a whole sentence of the PR text; copy one whole sentence`);
+    } else if (hits === 0) {
+      problems.push(`${label}: "quote" is not in any sentence of the PR text; copy it exactly from one sentence`);
+    }
     if (hits > 1) problems.push(`${label}: "quote" appears in ${hits} sentences of the PR text; quote enough to match only one`);
   };
   scenario.claims.forEach((claim, i) => checkQuote(`claim ${i + 1}`, claim.quote));
@@ -185,9 +195,11 @@ export function planProblems(scenario: Scenario, prText: string): string[] {
   const marked = quoted(scenario.notTestable, prText);
   sentencesOf(prText).forEach((sentence, i) => {
     const which = `sentence ${i + 1} of the PR text, ${JSON.stringify(sentence)},`;
-    if (claimed.has(i) && marked.has(i)) problems.push(`${which} is quoted by a claim and also marked not testable; keep only one`);
+    if (claimed.has(i) && marked.has(i)) {
+      problems.push(`${which} is quoted by a claim and also marked not testable; ${source === "file" ? "keep only one" : "drop the claim"}`);
+    }
     if (!claimed.has(i) && !marked.has(i)) {
-      problems.push(`${which} is neither quoted by a claim nor marked not testable; write a claim that quotes it`);
+      problems.push(`${which} is neither quoted by a claim nor marked not testable; write a claim that quotes it${source === "file" ? ", or mark it not testable" : ""}`);
     }
   });
   for (const check of checksOf(scenario)) {

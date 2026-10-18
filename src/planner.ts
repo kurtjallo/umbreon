@@ -121,7 +121,7 @@ export function sortProblems(reply: SortReply, count: number): string[] {
   const problems: string[] = [];
   const seen = new Set<number>();
   reply.notTestable.forEach(({ sentence }, i) => {
-    if (sentence < 1 || sentence > count) problems.push(`notTestable ${i + 1}: there is no sentence ${sentence}; the sentences are numbered 1 to ${count}`);
+    if (sentence > count) problems.push(`notTestable ${i + 1}: there is no sentence ${sentence}; the sentences are numbered 1 to ${count}`);
     else if (seen.has(sentence)) problems.push(`notTestable ${i + 1}: sentence ${sentence} is listed more than once; list each sentence once`);
     seen.add(sentence);
   });
@@ -148,7 +148,7 @@ export async function planScenario(
 ): Promise<Attempt<Scenario>> {
   return askTwice(model, "prove-change", PlanReplySchema, renderPlannerInput(input, notTestable), ({ claims }): Checked<Scenario> => {
     const scenario: Scenario = { claims, notTestable };
-    const problems = planProblems(scenario, input.prText);
+    const problems = planProblems(scenario, input.prText, "model");
     return problems.length ? { ok: false, problems } : { ok: true, value: scenario };
   }, signal);
 }
@@ -168,7 +168,7 @@ export async function repairChecks(
     `Return exactly ${failing.length} replacement checks, in the order listed. Each one replaces only the check it is listed for. `
       + `Every other check stays as it is. Fix the setup steps that failed. Never delete setup a check needs. `
       + `Each check needs at least one "then" assertion that is false right before its "when" action. `
-      + `A step that uses something this PR adds can fail on the old app, so keep it. `
+      + `A "when" or "then" step may use something this PR adds, so keep it. A "given" step must not: move such an action into "when" and such an assertion into "then". `
       + `Expected values in "then" still come from the PR text only.`,
   ].join("\n\n");
   const reply = await ask(model, "prove-change", RepairSchema, prompt, signal);
@@ -178,6 +178,6 @@ export async function repairChecks(
     return { ok: false, problems: [`returned ${checks.length} checks, expected ${failing.length}`], usage: reply.usage };
   }
   const repaired = replaceChecks(scenario, failing, checks);
-  const problems = planProblems(repaired, input.prText);
+  const problems = planProblems(repaired, input.prText, "model");
   return problems.length ? { ok: false, problems, usage: reply.usage } : { ok: true, scenario: repaired, usage: reply.usage };
 }

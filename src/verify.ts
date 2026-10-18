@@ -6,13 +6,13 @@ import { fileURLToPath } from "node:url";
 import type { LanguageModel } from "ai";
 import { chromium } from "playwright";
 import { AppNeverReady, DEMO_TODO, SetupError, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
-import { lookAtApp, rehearseCheck, runCheck } from "./drive.ts";
+import { lookAtApp, rehearseCheck, runCheck, type RehearsalProblem } from "./drive.ts";
 import {
   addUsage, planScenario, renderPlannerInput, renderSortInput, repairChecks, sortSentences, type FailingCheck, type PlannerInput, type Usage,
 } from "./planner.ts";
 import { renderReport, resultOf } from "./report.ts";
 import { ScenarioSchema, checksOf, freeze, planProblems, sentencesOf, type FrozenScenario, type NumberedCheck, type Scenario } from "./scenario.ts";
-import { decide, failureBefore, outcomesOf, type CheckRun, type Halt, type RunRecord, type Stage } from "./verdict.ts";
+import { decide, failureBefore, outcomesOf, showsChangeAdds, type CheckRun, type Halt, type RunRecord, type Stage } from "./verdict.ts";
 
 export type PlanChoice = { kind: "model"; model: LanguageModel } | { kind: "file"; path: string };
 export type VerifyOptions = { plan: PlanChoice; signal?: AbortSignal; runsDir?: string; log?: (line: string) => void };
@@ -56,7 +56,7 @@ function parsePlan(text: string, path: string, prText: string): { ok: true; scen
   }
   const parsed = ScenarioSchema.safeParse(json);
   if (!parsed.success) return { ok: false, problems: parsed.error.issues.map((issue) => `${issue.path.join(".") || "plan"}: ${issue.message}`) };
-  const problems = planProblems(parsed.data, prText);
+  const problems = planProblems(parsed.data, prText, "file");
   return problems.length ? { ok: false, problems } : { ok: true, scenario: parsed.data };
 }
 
@@ -150,24 +150,35 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
       log(`plan: ${plan.claims.length} claims, ${checksOf(plan).length} checks${planner.kind === "model" ? `, ${calls} calls` : ""}`);
 
       stage = "rehearse";
-      const rehearseOn = (repoDir: string, check: NumberedCheck, name: string): Promise<string | null> =>
-        withApp(repoDir, DEMO_TODO, { runId, check: name }, signal, (app) => rehearseCheck(browser, app, check, signal)).catch((error) => {
-          if (signal.aborted) throw error;
-          return error instanceof AppNeverReady ? "the app before this change never answered" : firstLine(error);
-        });
-      // A check that fails on the old app but holds on the new one uses something the change adds, so it needs no repair.
-      // The new app can only stop a repair, never shape one, so the model sees only the old app's problem.
+      const apps = {
+        old: { dir: prepared.old.dir, prefix: "rehearse", name: "the app before this change" },
+        new: { dir: prepared.new.dir, prefix: "rehearse-new", name: "the app with this change" },
+      };
+      const rehearseOn = (side: keyof typeof apps, check: NumberedCheck): Promise<RehearsalProblem | null> =>
+        withApp(apps[side].dir, DEMO_TODO, { runId, check: `${apps[side].prefix}-${check.id}` }, signal, (app) => rehearseCheck(browser, app, check, signal))
+          .catch((error): RehearsalProblem => {
+            if (signal.aborted) throw error;
+            const detail = error instanceof AppNeverReady ? `${apps[side].name} never answered` : `${apps[side].name} could not run: ${firstLine(error)}`;
+            return { status: "could_not_run", cause: "app_down", detail, index: 0, text: detail };
+          });
+      // A check whose old-app problem the baseline would credit, and which holds on the new app, uses something the
+      // change adds, so it needs no repair. So does one that expects something the change adds to go away, which the
+      // old app never shows, so no repair could help; the baseline never credits that one. The new app can only stop a
+      // repair, never shape one, so the model sees only the old app's problem.
+      const addedByChange = (check: NumberedCheck, problem: RehearsalProblem) =>
+        showsChangeAdds(check, problem) || (problem.status === "could_not_run" && problem.cause === "gone_rule");
       const rehearse = async (checks: readonly NumberedCheck[]): Promise<FailingCheck[]> => {
         const failing: FailingCheck[] = [];
         for (const check of checks) {
           signal.throwIfAborted();
-          const problem = await rehearseOn(prepared.old.dir, check, `rehearse-${check.id}`);
+          const problem = await rehearseOn("old", check);
           if (problem === null) continue;
-          if (await rehearseOn(prepared.new.dir, check, `rehearse-new-${check.id}`) === null) {
-            log(`rehearse: ${check.id} needs something this change adds; kept`);
+          if (addedByChange(check, problem) && (await rehearseOn("new", check)) === null) {
+            const cause = problem.status === "failed" ? "failed" : problem.cause;
+            log(`rehearse: ${check.id} needs something this change adds; kept (old app: ${cause}, ${problem.text})`);
             continue;
           }
-          failing.push({ claimIndex: check.claimIndex, checkIndex: check.checkIndex, id: check.id, problem });
+          failing.push({ claimIndex: check.claimIndex, checkIndex: check.checkIndex, id: check.id, problem: problem.text });
         }
         return failing;
       };
@@ -176,7 +187,7 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
       for (let round = 1; planner.kind === "model" && failing.length > 0 && round <= REPAIR_ROUNDS; round++) {
         const repaired = await repairChecks(input, planner.model, plan, failing, signal);
         calls++;
-        usage = { inputTokens: usage.inputTokens + repaired.usage.inputTokens, outputTokens: usage.outputTokens + repaired.usage.outputTokens };
+        usage = addUsage(usage, repaired.usage);
         if (!repaired.ok) {
           log(`repair ${round}: rejected, keeping the plan as it is (${repaired.problems[0]})`);
           break;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { ScenarioSchema, checksOf, freeze, sentencesOf, stepsOf, type NumberedCheck } from "./scenario.ts";
-import { decide, type Cause, type CheckRun, type Evidence, type Halt, type StepResult, type Verdict } from "./verdict.ts";
+import { decide, showsChangeAdds, type Cause, type CheckRun, type Evidence, type Halt, type StepResult, type Verdict } from "./verdict.ts";
 
 const good = freeze(
   ScenarioSchema.parse(JSON.parse(readFileSync(new URL("../scripts/fixtures/demo-todo-good.json", import.meta.url), "utf8"))),
@@ -52,8 +52,8 @@ test("PROVEN when every check passed with its evidence and one check fails on th
   assert.deepEqual(verdict.failsBefore, { checkId: "c2.1", at: failed(lastIndex(c2)) });
 });
 
-test("PROVEN when a setup or when step has nothing to act on before the change, because the change adds it", () => {
-  for (const [what, index] of [["setup", 1], ["when", c1.given.length]] as const) {
+test("PROVEN when a when or then step has nothing to act on before the change, because the change adds it", () => {
+  for (const [what, index] of [["when", c1.given.length], ["then", lastIndex(c1)]] as const) {
     const at = couldNotRun(index, "no_match");
     const verdict = verdictOf({ baseline: [stopAt(passingRun(c1), at)] });
     assert.ok(verdict.kind === "PROVEN", what);
@@ -61,10 +61,26 @@ test("PROVEN when a setup or when step has nothing to act on before the change, 
   }
 });
 
+test("showsChangeAdds, the rule rehearsal shares, holds for the same steps the baseline credits", () => {
+  const whenAt = c1.given.length;
+  assert.equal(showsChangeAdds(c1, { status: "could_not_run", cause: "no_match", index: whenAt }), true);
+  assert.equal(showsChangeAdds(c1, { status: "failed", index: lastIndex(c1) }), true);
+  assert.equal(showsChangeAdds(c1, { status: "could_not_run", cause: "no_match", index: whenAt - 1 }), false);
+  for (const cause of ["setup_failed", "gone_rule", "effect_rule", "app_down"] as const) {
+    assert.equal(showsChangeAdds(c1, { status: "could_not_run", cause, index: whenAt }), false, cause);
+  }
+});
+
+test("NOT PROVEN when every check stops at setup with nothing to act on before the change, as when the change renames a field setup fills", () => {
+  const baseline = checksOf(good).map((check) => stopAt(passingRun(check), couldNotRun(0, "no_match")));
+  assert.deepEqual(blockersOf(verdictOf({ baseline })), [{ reason: "no_check_fails_before" }]);
+});
+
 test("NOT PROVEN when nothing fails before the change: passing there too, setup failures, code rules, or a dead app, browser or page", () => {
   const whenAt = c2.given.length;
   const variants: [string, CheckRun][] = [
     ["passes there too", passingRun(c2)],
+    ["a setup step had nothing to act on", stopAt(passingRun(c2), couldNotRun(1, "no_match"))],
     ["a setup assertion did not hold", stopAt(passingRun(c2), couldNotRun(4, "setup_failed"))],
     ["the gone rule", stopAt(passingRun(c2), couldNotRun(whenAt, "gone_rule"))],
     ["the effect rule", stopAt(passingRun(c2), couldNotRun(whenAt, "effect_rule"))],

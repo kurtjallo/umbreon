@@ -13,7 +13,7 @@ You turn a pull request into browser checks that prove or disprove its claims.
 
 ## Sentences
 
-Headings are not sentences, and neither is text shorter than 8 characters. Each list item counts as a sentence, even without a full stop.
+Headings are not sentences. Each list item counts as a sentence, even a single word without a full stop.
 
 The sentences under "Sentences marked not testable" are already decided, each with its reason. Never quote them in a claim.
 
@@ -24,6 +24,8 @@ A check runs on a fresh, empty app that is already open on its start page.
 - "given" is the setup. It builds the situation, then asserts that the setup worked. Setup may only assert what is on screen, with expect_visible, expect_count, or expect_texts. Check focus only in "then".
 - "when" is the user action the claim is about.
 - "then" holds the assertions about the result. Expected values come from the PR text, never from what the code happens to do.
+
+Build "given" only from what the app had before this change. A step that uses or asserts something this change adds belongs in "when" (an action) or "then" (an assertion), never in "given".
 
 When a claim is about which item is affected ("only", "next", "previous", "other"), set up at least two items. Then a wrong item would show.
 

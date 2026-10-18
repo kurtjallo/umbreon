@@ -91,17 +91,24 @@ export function outcomesOf(scenario: Scenario, runs: readonly CheckRun[]): Outco
   return checksOf(scenario).map((check) => outcomeOf(check, runs.find((run) => run.checkId === check.id)));
 }
 
+type Stopped = { index: number } & ({ status: "failed" } | { status: "could_not_run"; cause: Cause });
+
 /**
- * The step that shows a check fails on the app before the change: a failed "then" step, or any step with nothing to
- * act on, setup included, because the change adds it. The baseline runs only after every check passed on the changed
- * app, so that same step worked there. Any other setup failure or a code rule shows only that the check could not run
- * there, and a dead app, browser or page shows nothing about the app at all.
+ * Whether a step that stopped a check on the app before the change shows that app lacks what the change adds: a failed
+ * "then" step, or a "when" or "then" step with nothing to act on. A setup step with nothing to act on shows only that
+ * the check could not run there, as when the change renames a field the setup fills, and so does every other cause.
+ * Rehearsal and the baseline share this rule, so rehearsal keeps unrepaired only a check the baseline could credit.
  */
+export function showsChangeAdds(check: Check, step: Stopped): boolean {
+  return step.status === "failed"
+    ? step.index >= check.given.length + check.when.length
+    : step.cause === "no_match" && step.index >= check.given.length;
+}
+
+/** The first step that did not pass, when it shows the app before the change lacks what the change adds. */
 export function failureBefore(check: Check, run: CheckRun): FailedStep | CouldNotRunStep | null {
   const at = run.steps.find((step) => step.status !== "passed");
-  if (at?.status === "failed" && at.index >= check.given.length + check.when.length) return at;
-  if (at?.status === "could_not_run" && at.cause === "no_match") return at;
-  return null;
+  return (at?.status === "failed" || at?.status === "could_not_run") && showsChangeAdds(check, at) ? at : null;
 }
 
 function firstFailureBefore(scenario: Scenario, baseline: readonly CheckRun[]): FailsBefore | null {

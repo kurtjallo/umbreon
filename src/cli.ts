@@ -25,12 +25,15 @@ const args = parse();
 if (!args) {
   exit(2, USAGE, process.stderr);
 } else {
+  // After a hangup the terminal is gone, so a write can fail with EIO or EPIPE. Unhandled, that error would end the
+  // run before cleanup and the record. exit() still gets the error in its write callback, so it still exits.
+  for (const stream of [process.stdout, process.stderr]) stream.on("error", () => {});
   const controller = new AbortController();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(signal, () => {
       if (controller.signal.aborted) process.exit(130);
       controller.abort();
-      process.stderr.write("Stopping after cleanup. Press Ctrl-C again to quit at once.\n");
+      process.stderr.write(`Stopping after cleanup (${signal}). ${signal === "SIGINT" ? "Press Ctrl-C again" : "Send it again"} to quit at once.\n`);
     });
   }
   try {

@@ -230,7 +230,9 @@
                 "role": "checkbox",
                 "name": "Buy milk"
               }
-            },
+            }
+          ],
+          "when": [
             {
               "do": "click",
               "target": {
@@ -239,18 +241,6 @@
                 "name": "Clear completed"
               }
             },
-            {
-              "do": "expect_texts",
-              "target": {
-                "by": "css",
-                "selector": ".task-title"
-              },
-              "texts": [
-                "Walk dog"
-              ]
-            }
-          ],
-          "when": [
             {
               "do": "click",
               "target": {
@@ -261,6 +251,16 @@
             }
           ],
           "then": [
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Walk dog"
+              ]
+            },
             {
               "do": "expect_visible",
               "target": {

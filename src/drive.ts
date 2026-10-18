@@ -21,6 +21,8 @@ const LOOK_CAP_CHARS = 120 * 1024;
 type Problem =
   | { status: "failed"; expected: string; observed: string }
   | { status: "could_not_run"; cause: Cause; detail: string };
+/** Where a rehearsal stopped, and `text`, one line for the repair prompt saying what failed and what the screen showed. */
+export type RehearsalProblem = Problem & { index: number; text: string };
 type Observation = { holds: boolean; expected: string; observed: string };
 type Session = { context: BrowserContext; page: Page; app: RunningApp; signal: AbortSignal; inFlight(): number; died(): boolean };
 
@@ -335,6 +337,14 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
       steps.push(result);
       stopped = result.status !== "passed";
     }
+    // An app that dies right after it answers leaves the updated page on screen, so every assertion still holds.
+    const last = steps[steps.length - 1];
+    if (last.status === "passed" && !(await app.alive())) {
+      steps[steps.length - 1] = {
+        status: "could_not_run", cause: "app_down", detail: "the app stopped running by the end of the check",
+        index: last.index, atMs: last.atMs, screenshot: last.screenshot, aria: { state: "missing", reason: "the app had stopped" },
+      };
+    }
     const trace: Evidence = traceFailure === null
       ? await capture(join(out, "trace.zip"), (path) => s.context.tracing.stop({ path }))
       : { state: "missing", reason: traceFailure };
@@ -351,22 +361,19 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
   }
 }
 
-/**
- * Runs a check's `given` on the old app, then the rules checked before `when`, and stops there.
- * Returns null when all of it holds, or one line for the repair prompt saying what failed and what the screen showed.
- */
-export async function rehearseCheck(browser: Browser, app: RunningApp, check: Check, signal: AbortSignal): Promise<string | null> {
+/** Runs a check's `given`, then the rules checked before `when`, and stops there. Returns null when all of it holds. */
+export async function rehearseCheck(browser: Browser, app: RunningApp, check: Check, signal: AbortSignal): Promise<RehearsalProblem | null> {
   const s = await openSession(browser, app, signal);
   const step = (work: () => Promise<Problem | null>) => bounded(s, () => hung, () => guarded(s, work));
   try {
     const start = await step(() => openStart(s));
-    if (start) return `the start page did not load: ${textOf(start)}`;
+    if (start) return { ...start, index: 0, text: `the start page did not load: ${textOf(start)}` };
     for (const [index, given] of check.given.entries()) {
       const problem = await step(() => runStep(s, given, "given"));
-      if (problem) return `${stepName(check, index)}: ${textOf(problem)}`;
+      if (problem) return { ...problem, index, text: `${stepName(check, index)}: ${textOf(problem)}` };
     }
     const broken = await step(() => rulesBeforeWhen(s, check, true));
-    return broken ? textOf(broken) : null;
+    return broken ? { ...broken, index: check.given.length, text: textOf(broken) } : null;
   } finally {
     await closeQuietly(s);
   }

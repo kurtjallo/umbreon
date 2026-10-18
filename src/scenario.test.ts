@@ -15,7 +15,9 @@ const fixture = (name: string) => ScenarioSchema.parse(raw(name));
 const source: PlanSource = { kind: "file", path: "scripts/fixtures/demo-todo-good.json" };
 
 test("every fixture parses and breaks no plan rule, so only running the app can catch the bad ones", () => {
-  for (const name of FIXTURES) assert.deepEqual(planProblems(fixture(name), prText), [], name);
+  for (const name of FIXTURES) assert.deepEqual(planProblems(fixture(name), prText, "file"), [], name);
+  const clear = ScenarioSchema.parse(JSON.parse(readFileSync(new URL("scripts/fixtures/clear-completed-good.json", root), "utf8")));
+  assert.deepEqual(planProblems(clear, readFileSync(new URL("practice/demo-todo/prs/clear-completed-correct/pr.md", root), "utf8"), "file"), []);
 });
 
 test("sentencesOf splits each practice PR into its five sentences and drops the title", () => {
@@ -30,14 +32,38 @@ test("sentencesOf splits each practice PR into its five sentences and drops the 
   }
 });
 
-test("a PR with text too short to quote, or a repeated sentence, still gets a valid plan", () => {
-  const github = `${prText}\n## Changes\n\n- Docs\n\n## Testing\n\nN/A\n`;
-  assert.deepEqual(sentencesOf(github), sentencesOf(prText));
-  assert.deepEqual(planProblems(fixture("good"), github), []);
+test("a one-word bullet is a sentence, so a plan that never claims it leaves it uncovered", () => {
+  const pr = "This PR adds two buttons:\n\n- Undo\n- Clear completed\n";
+  assert.deepEqual(sentencesOf(pr), ["This PR adds two buttons:", "Undo", "Clear completed"]);
+  const claim = (quote: string) => ({ ...fixture("good").claims[0], quote });
+  assert.deepEqual(uncoveredSentences({ claims: [claim("Clear completed")], notTestable: [] }, pr), ["This PR adds two buttons:", "Undo"]);
+});
+
+test("text as short as N/A must be marked not testable, and a repeated sentence counts once", () => {
+  const github = `${prText}\n## Testing\n\nN/A\n`;
+  assert.deepEqual(sentencesOf(github), [...sentencesOf(prText), "N/A"]);
+  assert.deepEqual(uncoveredSentences(fixture("good"), github), ["N/A"]);
+  const marked = fixture("good");
+  marked.notTestable.push({ quote: "N/A", reason: "Testing: no tests are listed." });
+  assert.ok(ScenarioSchema.safeParse(marked).success, "a one-sentence quote under 8 characters parses");
+  assert.deepEqual(planProblems(marked, github, "file"), []);
 
   const repeated = `${prText}\nDelete still removes only the task you clicked.\n`;
   assert.deepEqual(sentencesOf(repeated), sentencesOf(prText));
-  assert.deepEqual(planProblems(fixture("good"), repeated), []);
+  assert.deepEqual(planProblems(fixture("good"), repeated, "file"), []);
+});
+
+test("a quote under 8 characters picks only the sentence it equals, never one that merely contains it", () => {
+  const pr = "- Undo\n- Undo restores a deleted task.\n";
+  const claim = (quote: string) => ({ ...fixture("good").claims[0], quote });
+  assert.deepEqual(uncoveredSentences({ claims: [claim("Undo")], notTestable: [] }, pr), ["Undo restores a deleted task."]);
+  assert.deepEqual(planProblems({ claims: [claim("Undo"), claim("Undo restores a deleted task.")], notTestable: [] }, pr, "file"), []);
+  assert.deepEqual(uncoveredSentences({ claims: [claim("Undo r")], notTestable: [] }, pr), ["Undo", "Undo restores a deleted task."]);
+  assert.deepEqual(planProblems({ claims: [claim("Undo r"), claim("Undo")], notTestable: [] }, pr, "file"), [
+    'claim 1: "quote" is shorter than 8 characters, so it must be a whole sentence of the PR text; copy one whole sentence',
+    'sentence 2 of the PR text, "Undo restores a deleted task.", is neither quoted by a claim nor marked not testable; '
+      + "write a claim that quotes it, or mark it not testable",
+  ]);
 });
 
 test("sentencesOf reads GitHub's usual layout: headings dropped, each list item its own sentence", () => {
@@ -68,60 +94,59 @@ test("uncoveredSentences lists the PR sentence no claim quotes and no not-testab
   assert.deepEqual(uncoveredSentences({ ...fixture("good"), notTestable: [] }, prText), [sentencesOf(prText)[0]]);
 });
 
-test("planProblems rejects a plan that leaves a PR sentence unaccounted for", () => {
+test("planProblems rejects a plan that leaves a PR sentence unaccounted for, with advice its author can follow", () => {
   const scenario = fixture("good");
   scenario.claims.splice(1, 1);
-  assert.deepEqual(planProblems(scenario, prText), [
-    'sentence 2 of the PR text, "Now focus moves to the Delete button of the next task.", is neither quoted by a claim nor marked not testable; '
-      + "write a claim that quotes it",
-  ]);
+  const which = 'sentence 2 of the PR text, "Now focus moves to the Delete button of the next task.", is neither quoted by a claim nor marked not testable; ';
+  assert.deepEqual(planProblems(scenario, prText, "file"), [`${which}write a claim that quotes it, or mark it not testable`]);
+  assert.deepEqual(planProblems(scenario, prText, "model"), [`${which}write a claim that quotes it`], "only the sorter marks sentences not testable");
 });
 
 test("planProblems rejects a sentence that is both quoted by a claim and marked not testable", () => {
   const scenario = fixture("good");
   scenario.notTestable.push({ quote: "Delete still removes only", reason: "Already true before this change." });
-  assert.deepEqual(planProblems(scenario, prText), [
-    'sentence 5 of the PR text, "Delete still removes only the task you clicked.", is quoted by a claim and also marked not testable; keep only one',
-  ]);
+  const which = 'sentence 5 of the PR text, "Delete still removes only the task you clicked.", is quoted by a claim and also marked not testable; ';
+  assert.deepEqual(planProblems(scenario, prText, "file"), [`${which}keep only one`]);
+  assert.deepEqual(planProblems(scenario, prText, "model"), [`${which}drop the claim`], "a model plan cannot change the sorter's list");
 });
 
 test("planProblems holds a not-testable quote to the same rules as a claim's", () => {
   const scenario = fixture("good");
   scenario.notTestable[0].quote = "focus used to jump to the menu";
-  assert.deepEqual(planProblems(scenario, prText), [
+  assert.deepEqual(planProblems(scenario, prText, "file"), [
     'notTestable 1: "quote" is not in any sentence of the PR text; copy it exactly from one sentence',
     `sentence 1 of the PR text, ${JSON.stringify(sentencesOf(prText)[0])}, is neither quoted by a claim nor marked not testable; `
-      + "write a claim that quotes it",
+      + "write a claim that quotes it, or mark it not testable",
   ]);
 });
 
 test("planProblems rejects a quote that is in no PR sentence", () => {
   const scenario = fixture("good");
   scenario.claims[0].quote = "Delete removes every task at once.";
-  assert.deepEqual(planProblems(scenario, prText), [
+  assert.deepEqual(planProblems(scenario, prText, "file"), [
     'claim 1: "quote" is not in any sentence of the PR text; copy it exactly from one sentence',
     'sentence 5 of the PR text, "Delete still removes only the task you clicked.", is neither quoted by a claim nor marked not testable; '
-      + "write a claim that quotes it",
+      + "write a claim that quotes it, or mark it not testable",
   ]);
 });
 
 test("planProblems rejects a quote that matches more than one PR sentence", () => {
   const scenario = fixture("good");
   scenario.claims[2].quote = "the task";
-  assert.deepEqual(planProblems(scenario, prText), [
+  assert.deepEqual(planProblems(scenario, prText, "file"), [
     'claim 3: "quote" appears in 3 sentences of the PR text; quote enough to match only one',
     'sentence 3 of the PR text, "If you deleted the last task in the list, it moves to the previous task instead.", is neither quoted by a claim nor marked not testable; '
-      + "write a claim that quotes it",
+      + "write a claim that quotes it, or mark it not testable",
   ]);
 });
 
 test("a quote that equals a whole sentence picks that sentence, even when another sentence contains it", () => {
   const pr = "## Testing\n- Add tests\n- Add tests for delete\n";
   const claim = { ...fixture("good").claims[0], quote: "Add tests for delete" };
-  assert.deepEqual(planProblems({ claims: [claim], notTestable: [{ quote: "Add tests", reason: "Testing note." }] }, pr), []);
-  assert.deepEqual(planProblems({ claims: [{ ...claim, quote: "Add test" }], notTestable: [{ quote: "Add tests for delete", reason: "Testing note." }] }, pr), [
+  assert.deepEqual(planProblems({ claims: [claim], notTestable: [{ quote: "Add tests", reason: "Testing note." }] }, pr, "file"), []);
+  assert.deepEqual(planProblems({ claims: [{ ...claim, quote: "Add test" }], notTestable: [{ quote: "Add tests for delete", reason: "Testing note." }] }, pr, "file"), [
     'claim 1: "quote" appears in 2 sentences of the PR text; quote enough to match only one',
-    'sentence 1 of the PR text, "Add tests", is neither quoted by a claim nor marked not testable; write a claim that quotes it',
+    'sentence 1 of the PR text, "Add tests", is neither quoted by a claim nor marked not testable; write a claim that quotes it, or mark it not testable',
   ]);
 });
 
@@ -131,7 +156,7 @@ test("planProblems rejects a css :focus selector, even inside within", () => {
     do: "expect_visible",
     target: { by: "role", role: "button", name: "Delete Buy milk", within: { by: "css", selector: "li:focus-within" } },
   };
-  assert.deepEqual(planProblems(scenario, prText), [
+  assert.deepEqual(planProblems(scenario, prText, "file"), [
     'check c4.1: css selector "li:focus-within" uses :focus; check focus with expect_focus',
   ]);
 });
@@ -144,7 +169,7 @@ test("planProblems rejects a then made only of absences", () => {
     { do: "expect_count", target: titles, count: 0 },
     { do: "expect_texts", target: titles, texts: [] },
   ];
-  assert.deepEqual(planProblems(scenario, prText), [
+  assert.deepEqual(planProblems(scenario, prText, "file"), [
     'check c1.1: "then" needs at least one assertion that is not an absence (expect_absent, expect_count 0, or empty expect_texts)',
   ]);
 });

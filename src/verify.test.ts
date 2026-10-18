@@ -65,8 +65,11 @@ async function fromModel(caseName: string, ...replies: unknown[]) {
 
 type Cli = { code: number | null; stdout: string; stderr: string; pid: number; record: RunRecord | null };
 
-/** Runs the CLI, reads its run.json, and removes the run folder it made under runs/. `interrupt` sends one signal once the run has started. */
-async function cli(args: string[], interrupt?: { signal: NodeJS.Signals; afterMs: number }): Promise<Cli> {
+/**
+ * Runs the CLI, reads its run.json, and removes the run folder it made under runs/. `interrupt` sends one signal once
+ * the run has started, after closing our end of the child's stderr if asked, the way a closed terminal leaves it.
+ */
+async function cli(args: string[], interrupt?: { signal: NodeJS.Signals; afterMs: number; closeStderr?: boolean }): Promise<Cli> {
   const child = spawn(process.execPath, ["src/cli.ts", ...args], { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
@@ -76,6 +79,7 @@ async function cli(args: string[], interrupt?: { signal: NodeJS.Signals; afterMs
   if (interrupt) {
     const started = new Promise<void>((done) => child.stderr.on("data", () => /^run /m.test(stderr) && done()));
     await Promise.all([sleep(interrupt.afterMs), started]);
+    if (interrupt.closeStderr) child.stderr.destroy();
     child.kill(interrupt.signal);
   }
   const [code] = (await exited) as [number | null];
@@ -114,22 +118,41 @@ suite("verify", { concurrency: 3 }, () => {
     assert.ok(record.verdict.checks.some((outcome) => outcome.result === "failed"), "some check failed");
   });
 
-  test("a model plan that uses the button the PR adds is kept with no repair call, and a setup that clicks it proves clear-completed-correct", async () => {
+  test("a model plan whose \"when\" uses the button the PR adds is kept with no repair, but a setup that asserts the button goes to repair", async () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
-    const setupClicksTheButtonFirst = { claims: [good.claims[2], good.claims[0], good.claims[1]] };
-    const { record, calls, lines, log } = await fromModel("clear-completed-correct", CLEAR_SORT, setupClicksTheButtonFirst);
-    assert.equal(calls, 2, log);
-    for (const id of ["c1.1", "c1.2", "c2.1", "c3.1"]) assert.ok(lines.includes(`rehearse: ${id} needs something this change adds; kept`), log);
+    const hides = { checks: [good.claims[2].checks[1]] };
+    const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims: good.claims }, hides, hides);
+    for (const id of ["c1.1", "c2.1", "c3.1"]) {
+      assert.ok(lines.some((line) => line.startsWith(`rehearse: ${id} needs something this change adds; kept (old app: no_match, when step 1 click button "Clear completed"`)), log);
+    }
+    assert.ok(lines.includes("rehearse: failing c3.2"), log);
+    assert.equal(calls, 4, log);
+    const setupFailed = '- c3.2 (claim 3, check 2): given step 4 expect_visible button "Clear completed": expected at least 1 visible match, saw 0 visible matches';
+    assert.ok(userText(2).includes(setupFailed), userText(2));
+    assert.ok(!/^- c(1\.1|2\.1|3\.1) /m.test(userText(2)), userText(2));
     assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
     const { checkId, at } = record.verdict.failsBefore;
     assert.ok(checkId === "c1.1" && at.status === "could_not_run" && at.cause === "no_match", JSON.stringify(record.verdict.failsBefore));
-    assert.equal(at.index, 5, "given step 6 clicks Clear completed");
+    assert.equal(at.index, 9, "when step 1 clicks Clear completed");
+  });
+
+  test("a model plan whose check expects the button the PR adds to go away is kept with no repair, and never counts before the change", async () => {
+    const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
+    const claims = structuredClone(good.claims);
+    claims[2].checks[1].given.pop();
+    const { record, calls, lines, log } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims });
+    assert.ok(lines.some((line) => line.startsWith("rehearse: c3.2 needs something this change adds; kept (old app: gone_rule")), log);
+    assert.ok(lines.includes("rehearse: every check is ready"), log);
+    assert.equal(calls, 2, log);
+    assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
+    assert.equal(record.verdict.failsBefore.checkId, "c1.1");
   });
 
   test("a model plan whose check forgot its setup still gets a repair call, with only that check and the old app's problem", async () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
     const forgot = { claims: structuredClone(good.claims) };
     forgot.claims[1].checks[0].given = [];
+    forgot.claims[2].checks.pop();
     const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, forgot, { checks: good.claims[1].checks });
     assert.equal(calls, 3, log);
     assert.ok(lines.includes("rehearse: failing c2.1"), log);
@@ -225,10 +248,18 @@ suite("verify", { concurrency: 3 }, () => {
     assert.match(result.stderr, /is not a case folder/);
   });
 
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    test(`${signal} stops the CLI with 130, records the run as interrupted, and leaves no container or network behind`, async () => {
-      const result = await cli(["verify", caseDir("delete-correct"), "--scenario", fixture("good")], { signal, afterMs: 3_000 });
+  const stops = [
+    { signal: "SIGINT", closeStderr: false, says: "Stopping after cleanup (SIGINT). Press Ctrl-C again to quit at once." },
+    { signal: "SIGTERM", closeStderr: false, says: "Stopping after cleanup (SIGTERM). Send it again to quit at once." },
+    { signal: "SIGHUP", closeStderr: false, says: "Stopping after cleanup (SIGHUP). Send it again to quit at once." },
+    { signal: "SIGHUP", closeStderr: true, says: null },
+  ] as const;
+  for (const { signal, closeStderr, says } of stops) {
+    const name = `${signal}${closeStderr ? ", with the terminal's end of stderr already closed," : ""}`;
+    test(`${name} stops the CLI with 130, records the run as interrupted, and leaves no container or network behind`, async () => {
+      const result = await cli(["verify", caseDir("delete-correct"), "--scenario", fixture("good")], { signal, afterMs: 3_000, closeStderr });
       assert.equal(result.code, 130, result.stderr);
+      if (says) assert.ok(result.stderr.includes(`${says}\n`), result.stderr);
       assert.match(result.stdout, /Stopped: interrupted\./);
       const verdict = result.record?.verdict;
       assert.ok(verdict?.kind === "NOT PROVEN", JSON.stringify(verdict));
