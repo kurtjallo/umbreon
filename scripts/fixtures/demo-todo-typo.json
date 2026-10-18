@@ -1,0 +1,346 @@
+{
+  "claims": [
+    {
+      "quote": "Delete still removes only the task you clicked.",
+      "it": "It should remove only the task you clicked.",
+      "checks": [
+        {
+          "it": "It should remove only Walk dog when you delete it.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Buy milk",
+                "Walk dog"
+              ]
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Walk dog"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete",
+                "within": {
+                  "by": "role",
+                  "role": "dialog",
+                  "name": "Delete task?"
+                }
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_absent",
+              "target": {
+                "by": "text",
+                "text": "Walk Dog"
+              }
+            },
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Buy milk"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quote": "Now focus moves to the Delete button of the next task.",
+      "it": "It should move focus to the next task's Delete button.",
+      "checks": [
+        {
+          "it": "It should focus Delete Buy milk after deleting Walk dog.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "expect_count",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "count": 2
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Walk dog"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete",
+                "within": {
+                  "by": "role",
+                  "role": "dialog",
+                  "name": "Delete task?"
+                }
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_focus",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Buy milk"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quote": "If you deleted the last task in the list, it moves to the previous task instead.",
+      "it": "It should move focus to the previous task's Delete button.",
+      "checks": [
+        {
+          "it": "It should focus Delete Walk dog after deleting Buy milk.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "text",
+                "text": "Buy milk"
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Buy milk"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete",
+                "within": {
+                  "by": "role",
+                  "role": "dialog",
+                  "name": "Delete task?"
+                }
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_focus",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Walk dog"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quote": "If the list is now empty, focus goes to the task list box as before.",
+      "it": "It should move focus to the task list box when the list empties.",
+      "checks": [
+        {
+          "it": "It should focus the task list box after deleting the only task.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "text",
+                "text": "Buy milk"
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete Buy milk"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Delete",
+                "within": {
+                  "by": "role",
+                  "role": "dialog",
+                  "name": "Delete task?"
+                }
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_absent",
+              "target": {
+                "by": "text",
+                "text": "Buy milk"
+              }
+            },
+            {
+              "do": "expect_focus",
+              "target": {
+                "by": "css",
+                "selector": "#list-area"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notTestable": [
+    {
+      "quote": "After you delete a task, focus used to jump to the task list box, so keyboard users had to tab back to where they were.",
+      "reason": "History: how focus moved before this change, not what the changed app does."
+    }
+  ]
+}

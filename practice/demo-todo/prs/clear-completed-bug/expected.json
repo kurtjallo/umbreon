@@ -1,0 +1,4 @@
+{
+  "verdict": "NOT PROVEN",
+  "because": "With \"Buy milk\" and \"Pay rent\" completed and \"Walk dog\" not, Clear completed also removes \"Walk dog\", so the list ends up empty."
+}
