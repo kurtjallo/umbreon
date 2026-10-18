@@ -194,15 +194,27 @@ async function waitReady(name: string, url: string, signal: AbortSignal, logs: (
 }
 
 // An open port is not enough: Docker Desktop accepts the connection before the app listens,
-// then closes it with no reply.
-async function answers200(url: string, signal: AbortSignal): Promise<boolean> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(2_000)]) });
-    await res.arrayBuffer();
-    return res.status === 200;
-  } catch {
-    return false;
+// then closes it with no reply. Redirects are followed only on this origin. The app is the PR under test,
+// so a 3xx to anywhere else must not be requested, and a 200 from there must not count as ready.
+export async function answers200(url: string, signal: AbortSignal): Promise<boolean> {
+  const origin = new URL(url).origin;
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    try {
+      const res = await fetch(current, { redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(2_000)]) });
+      await res.arrayBuffer();
+      if (res.status === 200) return true;
+      if (res.status < 300 || res.status >= 400) return false;
+      const location = res.headers.get("location");
+      if (!location) return false;
+      const next = new URL(location, current);
+      if (next.origin !== origin) return false;
+      current = next.href;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 async function isRunning(name: string): Promise<boolean> {

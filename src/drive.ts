@@ -30,6 +30,7 @@ const cannot = (cause: Cause, detail: string): Problem => ({ status: "could_not_
 const hung = cannot("page_hung", `the step did not finish in ${STEP_MS / 1000} s; the page may be stuck in a loop`);
 const lost: Evidence = { state: "missing", reason: "the page hung" };
 const LATE = Symbol("late");
+const HANG = Symbol("hang");
 const firstLine = (error: unknown) => String(error instanceof Error ? error.message : error).split("\n")[0];
 const matches = (n: number) => `${n} visible match${n === 1 ? "" : "es"}`;
 const quoted = (texts: readonly string[]) => (texts.length ? texts.map((text) => JSON.stringify(text)).join(", ") : "nothing");
@@ -328,13 +329,22 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
         steps.push({ status: "skipped", index });
         continue;
       }
-      const result = await bounded(s, (): StepResult => ({ ...hung, index, atMs: Date.now() - startedAt, screenshot: lost, aria: lost }), async () => {
-        const problem = await guarded(s, async () =>
-          (index === 0 ? await openStart(s) : null)
-          ?? (index === whenAt ? await rulesBeforeWhen(s, check) : null)
-          ?? await runStep(s, step, phaseOf(check, index)));
-        return record(s, out, index, Date.now() - startedAt, problem);
-      });
+      // The start page has its own 20s. The step has its own. The screenshot is outside both, so a slow
+      // load or a slow capture cannot mark a step that finished as hung.
+      const hang = (): typeof HANG => HANG;
+      let problem: Problem | null | typeof HANG = null;
+      if (index === 0) problem = await bounded<Problem | null | typeof HANG>(s, hang, () => guarded(s, () => openStart(s)));
+      if (problem === null) {
+        problem = await bounded<Problem | null | typeof HANG>(s, hang, () => guarded(s, async () =>
+          (index === whenAt ? await rulesBeforeWhen(s, check) : null)
+          ?? await runStep(s, step, phaseOf(check, index))));
+      }
+      if (problem === HANG) {
+        steps.push({ ...hung, index, atMs: Date.now() - startedAt, screenshot: lost, aria: lost });
+        stopped = true;
+        continue;
+      }
+      const result = await record(s, out, index, Date.now() - startedAt, problem);
       steps.push(result);
       stopped = result.status !== "passed";
     }

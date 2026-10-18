@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmod, cp, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import http from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { AppNeverReady, DEMO_TODO, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
+import { answers200, AppNeverReady, DEMO_TODO, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
 
 const exec = promisify(execFile);
 const APP_DIR = fileURLToPath(new URL("../practice/demo-todo", import.meta.url));
@@ -22,6 +23,34 @@ before(async () => {
 after(() => rm(tmp, { recursive: true, force: true }));
 
 const exists = (path: string) => stat(path).then(() => true, () => false);
+const listen = (server: http.Server) => new Promise<string>((done) => {
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address() as AddressInfo;
+    done(`http://127.0.0.1:${address.port}`);
+  });
+});
+
+test("a redirect off the app is not a ready answer, and a redirect on the app is", async () => {
+  let elsewhere = 0;
+  const other = http.createServer((_req, res) => { elsewhere++; res.writeHead(200); res.end("elsewhere"); });
+  const otherOrigin = await listen(other);
+  const app = http.createServer((req, res) => {
+    if (req.url === "/ready") { res.writeHead(200); res.end("ok"); return; }
+    if (req.url === "/same") { res.writeHead(302, { Location: "/ready" }); res.end(); return; }
+    res.writeHead(302, { Location: `${otherOrigin}/stolen` });
+    res.end();
+  });
+  const origin = await listen(app);
+  try {
+    assert.equal(await answers200(`${origin}/ready`, AbortSignal.timeout(2_000)), true);
+    assert.equal(await answers200(`${origin}/same`, AbortSignal.timeout(2_000)), true);
+    assert.equal(await answers200(`${origin}/away`, AbortSignal.timeout(2_000)), false);
+    assert.equal(elsewhere, 0);
+  } finally {
+    other.close();
+    app.close();
+  }
+});
 const runId = (check: string) => `test-${process.pid}-${check}`;
 
 async function containersOfRun(id: string): Promise<string[]> {
