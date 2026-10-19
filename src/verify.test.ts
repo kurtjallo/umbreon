@@ -9,8 +9,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { MockLanguageModelV4 } from "ai/test";
+import { parseEvents, type RunEvent } from "./events.ts";
 import { renderSortInput, systemPrompt } from "./planner.ts";
-import { checksOf, sentencesOf } from "./scenario.ts";
+import { lineOf } from "./report.ts";
+import { checksOf, sentencesOf, stepsOf } from "./scenario.ts";
 import type { Evidence, RunRecord } from "./verdict.ts";
 import { verify } from "./verify.ts";
 
@@ -52,15 +54,50 @@ async function assertEvidence(record: RunRecord): Promise<void> {
   }
 }
 
+const eventsOf = async (record: RunRecord) => parseEvents(await readFile(join(record.dir, "events.jsonl"), "utf8"));
+
+/** Each rehearsal of one check, in order: which app it ran on, whether the check was ready there, and what stopped it. */
+function rehearsed(events: readonly RunEvent[], checkId: string): { side: string; ready: boolean; problem: string | null }[] {
+  return events.flatMap((event) => (event.type === "check_finished" && event.phase === "rehearse" && event.checkId === checkId
+    ? [{ side: event.side, ready: event.ready, problem: event.problem }]
+    : []));
+}
+
+/** The checks whose last rehearsal left them not ready on either app, so they would go to repair. */
+function notReady(events: readonly RunEvent[]): string[] {
+  const last = new Map<string, boolean>();
+  for (const event of events) if (event.type === "check_finished" && event.phase === "rehearse") last.set(event.checkId, event.ready);
+  return [...last].filter(([, ready]) => !ready).map(([checkId]) => checkId);
+}
+
+/** The purpose of each model call, in order, after checking that each one was announced by a model_call_started just before it. */
+function callsOf(events: readonly RunEvent[]): string[] {
+  const purposes: string[] = [];
+  let pending: string | null = null;
+  for (const event of events) {
+    if (event.type === "model_call_started") {
+      assert.equal(pending, null, `a ${event.purpose} call started while a ${pending} call was in flight`);
+      pending = event.purpose;
+    } else if (event.type === "model_call") {
+      assert.equal(event.purpose, pending, `a ${event.purpose} call finished without starting`);
+      pending = null;
+      purposes.push(event.purpose);
+    }
+  }
+  assert.equal(pending, null, `a ${pending} call started and never finished`);
+  return purposes;
+}
+
 /** Runs a case with a fake model that answers the sort call, the planning call and then any repair calls, in order. */
 async function fromModel(caseName: string, ...replies: unknown[]) {
   const model = new MockLanguageModelV4({ doGenerate: replies.map(reply) });
-  const lines: string[] = [];
-  const record = await verify(caseDir(caseName), { plan: { kind: "model", model }, runsDir, log: (line) => lines.push(line) });
+  const events: RunEvent[] = [];
+  const record = await verify(caseDir(caseName), { plan: { kind: "model", model }, runsDir, onEvent: (event) => events.push(event) });
   const userText = (call: number) => model.doGenerateCalls[call].prompt
     .flatMap((message) => (message.role === "user" ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])) : []))
     .join("\n");
-  return { record, calls: model.doGenerateCalls.length, lines, log: lines.join("\n"), userText };
+  const plans = events.flatMap((event) => (event.type === "plan" ? [event.frozen] : []));
+  return { record, calls: model.doGenerateCalls.length, events, plans, log: events.map(lineOf).filter((line) => line !== null).join("\n"), userText };
 }
 
 type Cli = { code: number | null; stdout: string; stderr: string; pid: number; record: RunRecord | null };
@@ -102,13 +139,35 @@ suite("verify", { concurrency: 3 }, () => {
     await assertEvidence(record);
   });
 
-  test("the good plan catches delete-bug with failed checks", async () => {
+  test("the good plan catches delete-bug with failed checks, and its event log runs in order from run_started to the verdict", async () => {
     const record = await fromFile("good", "delete-bug");
     assert.ok(record.verdict.kind === "NOT PROVEN");
     assert.deepEqual(record.verdict.blockers, [{ reason: "check_did_not_pass" }]);
     assert.ok(record.verdict.checks.some((outcome) => outcome.result === "failed"), "some check failed");
     assert.deepEqual(record.baseline, [], "the old app is not run once a check fails");
     await assertEvidence(record);
+
+    const events = await eventsOf(record);
+    assert.deepEqual(events.map((event) => event.seq), events.map((_, i) => i + 1), "seq runs 1..n");
+    assert.equal(events[0].type, "run_started");
+    assert.deepEqual(events.flatMap((event) => (event.type === "stage_started" ? [event.stage] : [])), ["repo", "look", "plan", "rehearse", "drive"]);
+    assert.deepEqual(events.flatMap((event) => (event.type === "plan" ? [[event.frozen, event.sha256]] : [])), [[false, null], [true, record.scenario?.sha256]]);
+    assert.deepEqual(callsOf(events), [], "a plan from a file makes no model calls");
+    for (const check of checksOf(record.scenario!)) {
+      const own = events.filter((event) => "checkId" in event && event.checkId === check.id && "phase" in event && event.phase === "drive");
+      assert.equal(own[0].type, "check_started", check.id);
+      assert.equal(own.at(-1)?.type, "check_finished", check.id);
+      const steps = own.slice(1, -1).flatMap((event) => (event.type === "step" ? [event.index] : []));
+      assert.deepEqual(steps, stepsOf(check).map((_, index) => index), `${check.id}: one step event per step, between check_started and check_finished`);
+    }
+    const finished = events.flatMap((event) => (event.type === "check_finished" && event.phase === "drive" ? [[event.checkId, event.result, event.problem !== null]] : []));
+    assert.deepEqual(finished, record.verdict.checks.map((outcome) => [outcome.checkId, outcome.result, outcome.result !== "passed"]));
+    const verdict = events.at(-1);
+    assert.ok(verdict?.type === "verdict", JSON.stringify(verdict));
+    assert.deepEqual(
+      { kind: verdict.kind, commit: verdict.commit, halt: verdict.halt, checks: verdict.checks },
+      { kind: "NOT PROVEN", commit: record.commit, halt: null, checks: record.verdict.checks.map(({ checkId, result }) => ({ checkId, result })) },
+    );
   });
 
   test("a renamed field in a later action is not proof, even when the check passes on the changed app", async () => {
@@ -128,11 +187,16 @@ suite("verify", { concurrency: 3 }, () => {
   test("a model plan whose \"when\" uses the button the PR adds is kept with no repair, but a setup that asserts the button goes to repair", async () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
     const hides = { checks: [good.claims[2].checks[1]] };
-    const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims: good.claims }, hides, hides);
+    const { record, calls, events, plans, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims: good.claims }, hides, hides);
     for (const id of ["c1.2", "c2.1", "c3.1"]) {
-      assert.ok(lines.some((line) => line.startsWith(`rehearse: ${id} needs something this change adds; kept (old app: no_match, when step 1 click button "Clear completed"`)), log);
+      const seen = rehearsed(events, id);
+      assert.deepEqual(seen.map(({ side, ready }) => [side, ready]), [["old", false], ["new", true]], `${id} is kept\n${log}`);
+      assert.match(seen[0].problem ?? "", /^no match: when step 1 click button "Clear completed"/, log);
     }
-    assert.ok(lines.includes("rehearse: failing c3.2"), log);
+    assert.deepEqual(rehearsed(events, "c3.2").map(({ side, ready }) => [side, ready]), [["old", false], ["old", false], ["old", false]], `c3.2 fails on the old app before and after each repair\n${log}`);
+    assert.deepEqual(notReady(events), ["c3.2"], log);
+    assert.deepEqual(callsOf(events), ["sort", "plan", "repair", "repair"], log);
+    assert.deepEqual(plans, [false, false, false, true], "a plan after planning, one after each accepted repair, then the frozen one");
     assert.equal(calls, 4, log);
     const setupFailed = '- c3.2 (claim 3, check 2): given step 4 expect_visible button "Clear completed": expected at least 1 visible match, saw 0 visible matches';
     assert.ok(userText(2).includes(setupFailed), userText(2));
@@ -147,9 +211,13 @@ suite("verify", { concurrency: 3 }, () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
     const claims = structuredClone(good.claims);
     claims[2].checks[1].given.pop();
-    const { record, calls, lines, log } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims });
-    assert.ok(lines.some((line) => line.startsWith("rehearse: c3.2 needs something this change adds; kept (old app: gone_rule")), log);
-    assert.ok(lines.includes("rehearse: every check is ready"), log);
+    const { record, calls, events, plans, log } = await fromModel("clear-completed-correct", CLEAR_SORT, { claims });
+    const seen = rehearsed(events, "c3.2");
+    assert.deepEqual(seen.map(({ side, ready }) => [side, ready]), [["old", false], ["new", true]], log);
+    assert.match(seen[0].problem ?? "", /^gone rule: /, log);
+    assert.deepEqual(notReady(events), [], `every check is ready on one app or the other\n${log}`);
+    assert.deepEqual(callsOf(events), ["sort", "plan"], log);
+    assert.deepEqual(plans, [false, true], log);
     assert.equal(calls, 2, log);
     assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
     assert.equal(record.verdict.failsBefore.checkId, "c1.1");
@@ -160,11 +228,17 @@ suite("verify", { concurrency: 3 }, () => {
     const forgot = { claims: structuredClone(good.claims) };
     forgot.claims[1].checks[0].given = [];
     forgot.claims[2].checks.pop();
-    const { record, calls, lines, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, forgot, { checks: good.claims[1].checks });
+    const { record, calls, events, plans, log, userText } = await fromModel("clear-completed-correct", CLEAR_SORT, forgot, { checks: good.claims[1].checks });
     assert.equal(calls, 3, log);
-    assert.ok(lines.includes("rehearse: failing c2.1"), log);
+    assert.deepEqual(callsOf(events), ["sort", "plan", "repair"], log);
+    assert.deepEqual(
+      rehearsed(events, "c2.1").map(({ side, ready }) => [side, ready]),
+      [["old", false], ["new", false], ["old", false], ["new", true]],
+      `with no setup c2.1 fails on both apps; repaired, it fails on the old app and is kept because the new one passes\n${log}`,
+    );
     assert.ok(userText(2).includes('when step 1 click button "Clear completed": nothing matched its target before the "when" steps'), userText(2));
-    assert.ok(lines.includes("repair 1: every check is ready"), log);
+    assert.deepEqual(notReady(events), [], `after the repair every check is ready\n${log}`);
+    assert.deepEqual(plans, [false, false, true], log);
     assert.ok(record.verdict.kind === "PROVEN", JSON.stringify(record.verdict));
   });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { SetupError } from "./app.ts";
-import { renderReport } from "./report.ts";
+import { lineOf, renderReport } from "./report.ts";
 import { plannerModel, verify, type PlanChoice } from "./verify.ts";
 
 const USAGE = "usage: umbreon verify <caseDir> [--scenario <file>]";
@@ -38,7 +38,11 @@ if (!args) {
   }
   try {
     const plan: PlanChoice = args.scenario ? { kind: "file", path: args.scenario } : { kind: "model", model: await plannerModel() };
-    const record = await verify(args.caseDir, { plan, signal: controller.signal, log: (line) => process.stderr.write(`${line}\n`) });
+    const onEvent: Parameters<typeof verify>[1]["onEvent"] = (event) => {
+      const line = lineOf(event);
+      if (line !== null) process.stderr.write(`${line}\n`);
+    };
+    const record = await verify(args.caseDir, { plan, signal: controller.signal, onEvent });
     const { verdict } = record;
     const interrupted = verdict.kind === "NOT PROVEN" && verdict.blockers.some((b) => b.reason === "halted" && b.halt.reason === "interrupted");
     const code = verdict.kind === "PROVEN" ? 0 : interrupted ? 130 : 1;
