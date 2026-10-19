@@ -362,13 +362,14 @@ function checkDetail(check, steps) {
     case "failed":
     case "could_not_run": {
       const at = steps.find((step) => step.status === check.state);
-      const problem = check.problem && check.problem !== at?.detail ? line("Problem", check.problem) : "";
+      // The stopped step already names what went wrong, so the check's own problem line shows only without one.
+      const problem = check.problem && !at ? line("Problem", check.problem) : "";
       if (!at && !problem && check.state === "could_not_run") {
         const done = steps.filter((step) => step.status !== "todo" && step.status !== "now").length;
         return h`<div class="dim">${done === 0 ? "this check never ran" : `the run stopped after step ${done} of ${steps.length}`}</div>`;
       }
       if (!at) return problem;
-      return h`${line(check.state === "failed" ? "Failed" : "Could not run", h`step ${at.n} · <code>${at.text}</code>`)}${at.detail ? line("Why", at.detail) : ""}${problem}`;
+      return h`${line(check.state === "failed" ? "Failed" : "Could not run", h`step ${at.n} · <code>${at.text}</code>`)}${at.detail ? line("Why", at.detail) : ""}`;
     }
     case "evidence_missing":
       return h`<div class="tint warn">every step passed, but some evidence is missing</div>${check.problem ? line("Problem", check.problem) : ""}`;
