@@ -1,0 +1,373 @@
+{
+  "claims": [
+    {
+      "quote": "Now a Clear completed button below the list removes every completed task at once.",
+      "it": "It should remove every completed task with one click.",
+      "checks": [
+        {
+          "it": "It should show Clear completed once a task is completed.",
+          "given": [
+            {
+              "do": "fill",
+              "target": { "by": "label", "text": "Title" },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": { "by": "role", "role": "button", "name": "Add task" }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": { "by": "role", "role": "checkbox", "name": "Buy milk" }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_visible",
+              "target": { "by": "role", "role": "button", "name": "Clear completed" }
+            }
+          ]
+        },
+        {
+          "it": "It should remove Buy milk and Pay rent, both completed, and leave Walk dog.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Pay rent"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Buy milk"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Pay rent"
+              }
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "text",
+                "text": "2 of 3 done"
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Clear completed"
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Walk dog"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quote": "Tasks you have not completed stay in the list.",
+      "it": "It should keep the tasks you have not completed.",
+      "checks": [
+        {
+          "it": "It should keep Buy milk when only Walk dog is completed.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Walk dog"
+              }
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "text",
+                "text": "1 of 2 done"
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Clear completed"
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Buy milk"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quote": "The button only shows while at least one task is completed.",
+      "it": "It should show the button only while a task is completed.",
+      "checks": [
+        {
+          "it": "It should show Clear completed again when you complete a task after clearing.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Walk dog"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Buy milk"
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Clear completed"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Walk dog"
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_texts",
+              "target": {
+                "by": "css",
+                "selector": ".task-title"
+              },
+              "texts": [
+                "Walk dog"
+              ]
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Clear completed"
+              }
+            }
+          ]
+        },
+        {
+          "it": "It should hide Clear completed when you uncheck the only completed task.",
+          "given": [
+            {
+              "do": "fill",
+              "target": {
+                "by": "label",
+                "text": "Title"
+              },
+              "value": "Buy milk"
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Add task"
+              }
+            },
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Buy milk"
+              }
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Clear completed"
+              }
+            }
+          ],
+          "when": [
+            {
+              "do": "click",
+              "target": {
+                "by": "role",
+                "role": "checkbox",
+                "name": "Buy milk"
+              }
+            }
+          ],
+          "then": [
+            {
+              "do": "expect_absent",
+              "target": {
+                "by": "role",
+                "role": "button",
+                "name": "Clear completed"
+              }
+            },
+            {
+              "do": "expect_visible",
+              "target": {
+                "by": "text",
+                "text": "0 of 1 done"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notTestable": [
+    {
+      "quote": "Completed tasks used to stay in the list until you deleted them one at a time.",
+      "reason": "History: how the app behaved before this change, not what the changed app does."
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+diff --git a/public/app.js b/public/app.js
+index ddbc98e..acc0e68 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -107,6 +107,15 @@ function listContent() {
+   return [
+     h("p", { class: "summary" }, `${done} of ${list.tasks.length} done`),
+     h("ul", { class: "tasks", "aria-label": "Tasks" }, ...list.tasks.map(taskRow)),
++    ...(done > 0
++      ? [
++          h(
++            "div",
++            { class: "form-actions list-actions" },
++            h("button", { type: "button", class: "quiet", "data-key": "clear-completed", onclick: clearCompleted }, "Clear completed"),
++          ),
++        ]
++      : []),
+   ];
+ }
+ 
+@@ -295,6 +304,17 @@ function askDelete(task) {
+   render();
+ }
+ 
++async function clearCompleted() {
++  const response = await api("DELETE", "/api/tasks/completed");
++  if (response.ok) {
++    state.list = { kind: "ready", tasks: response.data.tasks };
++    announce("status", "Completed tasks cleared.");
++  } else {
++    announce("alert", "Couldn't clear completed tasks. Please try again.");
++  }
++  render("list");
++}
++
+ addForm.addEventListener("submit", async (event) => {
+   event.preventDefault();
+   if (state.adding) return;
+diff --git a/public/styles.css b/public/styles.css
+index be8653c..56f360c 100644
+--- a/public/styles.css
++++ b/public/styles.css
+@@ -288,6 +288,11 @@ textarea:focus-visible {
+   list-style: none;
+ }
+ 
++.list-actions {
++  padding: var(--space-2) var(--space-3);
++  border-top: 1px solid var(--border);
++}
++
+ .task {
+   display: grid;
+   grid-template-columns: auto minmax(0, 1fr) auto;
+diff --git a/server.js b/server.js
+index 65920ef..f738e28 100644
+--- a/server.js
++++ b/server.js
+@@ -50,6 +50,7 @@ const updateTask = db.prepare(`
+   RETURNING *
+ `);
+ const deleteTask = db.prepare("DELETE FROM tasks WHERE id = ?");
++const deleteCompleted = db.prepare("DELETE FROM tasks WHERE completed IS NOT NULL");
+ 
+ function toTask(row) {
+   return {
+@@ -148,6 +149,13 @@ async function handle(req, res) {
+     throw httpError(405, "Method not allowed.", { Allow: "GET, POST" });
+   }
+ 
++  if (path === "/api/tasks/completed") {
++    if (req.method !== "DELETE") throw httpError(405, "Method not allowed.", { Allow: "DELETE" });
++    deleteCompleted.run();
++    sendJson(res, 200, { tasks: listTasks.all().map(toTask) });
++    return;
++  }
++
+   const idText = /^\/api\/tasks\/([1-9][0-9]*)$/.exec(path)?.[1];
+   if (idText) {
+     const id = Number(idText);
