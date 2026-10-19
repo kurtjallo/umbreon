@@ -1,4 +1,5 @@
 import { dirname, relative } from "node:path";
+import type { RunEvent } from "./events.ts";
 import { checksOf, describeLocator, stepsOf, type Check, type Step } from "./scenario.ts";
 import type { Blocker, CheckRun, CouldNotRunStep, Evidence, FailedStep, FailsBefore, Halt, Outcome, RunRecord, Verdict } from "./verdict.ts";
 
@@ -73,11 +74,14 @@ function evidenceLine(run: CheckRun | undefined, at: FailedStep | CouldNotRunSte
   return [`   ${files.length ? `evidence in ${relative(cwd, dir)}: ` : ""}${shown.join(" · ")}`];
 }
 
-function stepLine(check: Check, at: FailedStep | CouldNotRunStep): string {
+/** Names the step that stopped a check and what happened: `then step 2 expect_focus button "Delete Alpha": expected ..., saw ...`. */
+export function stepProblem(check: Check, at: FailedStep | CouldNotRunStep): string {
   return at.status === "failed"
-    ? `   ${stepName(check, at.index)}: expected ${at.expected}, saw ${at.observed}`
-    : `   ${stepName(check, at.index)} could not run (${at.cause.replace("_", " ")}): ${at.detail}`;
+    ? `${stepName(check, at.index)}: expected ${at.expected}, saw ${at.observed}`
+    : `${stepName(check, at.index)} could not run (${at.cause.replace("_", " ")}): ${at.detail}`;
 }
+
+const stepLine = (check: Check, at: FailedStep | CouldNotRunStep) => `   ${stepProblem(check, at)}`;
 
 function outcomeLines(outcome: Outcome, check: Check, run: CheckRun | undefined, width: number, cwd: string): string[] {
   const head = `${MARK[outcome.result]} ${outcome.it.padEnd(width)}  [${outcome.checkId}]`;
@@ -112,7 +116,8 @@ export function resultOf(run: CheckRun): string {
   return !at ? "passed" : at.status === "could_not_run" ? `could not run (${at.cause.replace("_", " ")})` : at.status;
 }
 
-function blockerLines(blocker: Blocker, baseline: readonly CheckRun[]): string[] {
+/** Why a run is not proven, as the report shows it: the halt or blocker on one line, details indented under it. */
+export function blockerLines(blocker: Blocker, baseline: readonly CheckRun[]): string[] {
   switch (blocker.reason) {
     case "halted":
       return haltLines(blocker.halt);
@@ -148,6 +153,43 @@ function finalLine(verdict: Verdict): string {
   const missing = count("evidence_missing");
   return `NOT PROVEN${forCommit}: ${count("passed")} of ${n} passed, ${count("failed")} failed, ${count("could_not_run")} could not run`
     + (missing ? `, ${missing} missing evidence` : "");
+}
+
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+function rehearseLine(event: Extract<RunEvent, { type: "check_finished"; phase: "rehearse" }>): string {
+  if (event.ready) return `rehearse ${event.checkId}: ${event.side === "old" ? "ready" : "needs something this change adds; kept"}`;
+  return `rehearse ${event.checkId}: not ready on the app ${event.side === "old" ? "before" : "with"} this change (${event.problem})`;
+}
+
+/** The one line `umbreon verify` prints for an event while a run goes, or null for events only the dashboard shows. */
+export function lineOf(event: RunEvent): string | null {
+  switch (event.type) {
+    case "run_started": return `run ${event.runId}`;
+    case "repo_ready": return `repo: old ${short(event.base)}, changed ${short(event.commit)}`;
+    case "look_ready": return `look: ${event.files} files${event.truncated ? ", cut short" : ""}`;
+    case "model_call_started": return `${event.purpose}: asking the model`;
+    case "model_call": {
+      const spent = `${seconds(event.ms)}, ${tokens(event.inputTokens)} in / ${tokens(event.outputTokens)} out`;
+      if (event.ok) return `${event.purpose}: answered in ${spent}`;
+      const kept = event.purpose === "repair" ? "; keeping the plan as it is" : "";
+      return `${event.purpose}: answer rejected after ${spent} (${event.problems[0]})${kept}`;
+    }
+    case "plan": {
+      if (event.frozen) return null;
+      const checks = event.plan.claims.reduce((n, claim) => n + claim.checks.length, 0);
+      const notTestable = event.plan.notTestable.length;
+      return `plan: ${event.plan.claims.length} claims, ${checks} checks${notTestable ? `, ${notTestable} sentence${notTestable === 1 ? "" : "s"} not testable` : ""}`;
+    }
+    case "check_finished":
+      if (event.phase === "rehearse") return rehearseLine(event);
+      return `${event.phase} ${event.checkId}: ${event.result.replace(/_/g, " ")}${event.problem ? `, ${event.problem}` : ""}`;
+    case "verdict": return `decide: ${event.kind}${event.halt ? ` (${event.halt.stage}: ${event.halt.reason})` : ""}`;
+    case "stage_started":
+    case "check_started":
+    case "step":
+      return null;
+  }
 }
 
 /** The text `umbreon verify` prints. Evidence paths are shown relative to `cwd`. */
