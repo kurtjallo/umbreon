@@ -97,6 +97,7 @@
   .stage.halted { border-color: var(--bad); box-shadow: inset 0 0 0 1px var(--bad); }
   .banner { margin-bottom: 8px; padding: 11px 14px; border-radius: 9px; font-size: 13.5px; background: color-mix(in srgb, var(--tone) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent); }
   .banner b { display: block; margin-bottom: 2px; }
+  .reasons { margin-top: 6px; white-space: pre-wrap; font-size: 13px; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -176,15 +177,16 @@ function words(ms) {
 }
 const tokens = (n) => n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
 const thousands = (n) => n.toLocaleString("en-US");
-const cost = (usd) => usd === null ? "unknown" : usd > 0 && usd < 0.0005 ? "<$0.001" : `$${usd.toFixed(3)}`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function timeOfDay(iso) {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 const runFile = (runId, path) => `/runs/${encodeURIComponent(runId)}/${path.split("/").map(encodeURIComponent).join("/")}`;
 
-const STAGE_LABEL = { repo: "Repo", look: "Look", plan: "Plan", rehearse: "Rehearse", repair: "Repair", drive: "Drive", baseline: "Baseline" };
+const STAGE_LABEL = { repo: "Repo", look: "Look", sort: "Sort", plan: "Plan", rehearse: "Rehearse", drive: "Drive", baseline: "Baseline" };
 const PHASE_LABEL = { given: "setup", when: "action", then: "result" };
+const APP_NAME = { old: "the app before the change", new: "the changed app" };
 const RUN_STATUS = {
   running: { tone: "info", short: "running", long: "Running", over: false },
   stuck: { tone: "warn", short: "stuck", long: "Stuck", over: false },
@@ -247,14 +249,21 @@ function totals(view, checks) {
   return h`<div class="totals">
     <div>Elapsed<b>${clock(view.elapsedMs)}</b></div>
     <div>Tokens in / out<b>${tokens(view.totals.inputTokens)} / ${tokens(view.totals.outputTokens)}</b></div>
-    <div>Cost<b>${cost(view.totals.costUsd)}</b></div>
     <div>Checks<b>${view.plan ? `${run} of ${checks.length} run` : "not planned yet"}</b></div>
   </div>`;
 }
 
+function stageFacts(view, stage) {
+  const facts = [
+    stage.calls > 0 && plural(stage.calls, "call"),
+    stage.stage === "look" && view.look && `${plural(view.look.files, "file")}${view.look.truncated ? ", cut short" : ""}`,
+  ].filter(Boolean);
+  return facts.map((fact) => ` · ${fact}`).join("");
+}
+
 function stageNote(view, stage, checks) {
   switch (stage.state) {
-    case "done": return `✓ ${seconds(Math.max(stage.ms, 1000), 0)}${stage.calls > 0 ? ` · ${stage.calls} call${stage.calls === 1 ? "" : "s"}` : ""}`;
+    case "done": return `✓ ${seconds(Math.max(stage.ms, 1000), 0)}${stageFacts(view, stage)}`;
     case "now":
       if (stage.stage === "drive") return `check ${checks.filter((check) => DRIVEN.has(check.state)).length} of ${checks.length}`;
       if (stage.stage === "baseline") return `check ${checks.filter((check) => check.baseline !== null).length} of ${checks.length}`;
@@ -283,11 +292,21 @@ function banner(view) {
   if (!verdict) return "";
   const { counts } = verdict;
   const missing = counts.evidence_missing > 0 ? `, ${counts.evidence_missing} evidence missing` : "";
+  const stopped = stoppedLabel(view);
   return h`<div class="banner ${verdict.kind === "PROVEN" ? "ok" : "bad"}">
-    <b>${verdict.kind}${verdict.commit ? ` for ${verdict.commit.slice(0, 7)}` : ""}</b>
+    <b>${verdict.kind}${verdict.commit ? ` for ${verdict.commit.slice(0, 7)}` : ""}${stopped ? ` · ${stopped}` : ""}</b>
     ${counts.passed} of ${verdict.total} checks passed, ${counts.failed} failed, ${counts.could_not_run} could not run${missing}.
-    ${verdict.halt ? h`<div>Stopped early: ${verdict.halt}</div>` : ""}
+    ${verdict.reasons.length > 0 ? h`<div class="reasons">${verdict.reasons.map((reason) => h`<div>${reason}</div>`)}</div>` : ""}
   </div>`;
+}
+
+/** A run cut off by Ctrl-C or the time cap did not finish, which the verdict alone does not say. Other halts explain themselves in the reasons. */
+function stoppedLabel(view) {
+  switch (view.verdict?.halt?.reason) {
+    case "interrupted": return "Stopped: interrupted";
+    case "time_cap": return `Stopped: hit the ${words(view.capMs)} cap`;
+    default: return null;
+  }
 }
 
 const callName = (call) => `${call.purpose[0].toUpperCase()}${call.purpose.slice(1)}, call ${call.n}`;
@@ -297,23 +316,24 @@ function callRow(call) {
   const result = call.ok ? h`<span class="tint ok">valid reply</span>` : h`
     <span class="tint bad">rejected</span>${first ? h` · ${first}` : ""}
     ${rest.length > 0 ? h`<details data-key="problems:${call.n}"><summary data-key="summary:${call.n}">all ${call.problems.length} problems</summary><ul>${call.problems.map((problem) => h`<li>${problem}</li>`)}</ul></details>` : ""}`;
-  return h`<tr><td>${callName(call)}</td><td class="num">${seconds(call.ms, 1)}</td><td class="num">${thousands(call.inputTokens)}</td><td class="num">${thousands(call.outputTokens)}</td><td class="num">${cost(call.costUsd)}</td><td>${result}</td></tr>`;
+  return h`<tr><td>${callName(call)}</td><td class="num">${seconds(call.ms, 1)}</td><td class="num">${thousands(call.inputTokens)}</td><td class="num">${thousands(call.outputTokens)}</td><td>${result}</td></tr>`;
 }
 
 function aiCalls(view) {
   const pending = view.pendingCall;
   if (view.calls.length === 0 && !pending) return h`<h4>AI calls</h4><p class="dim">${RUN_STATUS[view.status].over ? "No AI calls." : "No AI calls yet."}</p>`;
   return h`<h4>AI calls</h4><table>
-    <thead><tr><th>Call</th><th class="num">Time</th><th class="num">In</th><th class="num">Out</th><th class="num">Cost</th><th>Result</th></tr></thead>
+    <thead><tr><th>Call</th><th class="num">Time</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th>Result</th></tr></thead>
     <tbody>${view.calls.map(callRow)}${pending ? h`
-      <tr><td>${callName(pending)}</td><td class="num">${clock(pending.ms)} …</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="tint warn">waiting for the answer</td></tr>` : ""}</tbody>
+      <tr><td>${callName(pending)}</td><td class="num">${clock(pending.ms)} …</td><td class="num">—</td><td class="num">—</td><td class="tint warn">waiting for the answer</td></tr>` : ""}</tbody>
   </table>`;
 }
 
 function pendingLine(check) {
   switch (check.state) {
-    case "rehearsing": return h`${LIVE_DOT}rehearsing on the app before the change`;
+    case "rehearsing": return h`${LIVE_DOT}rehearsing on ${APP_NAME[check.rehearsedOn] ?? "the app"}`;
     case "ready": return "ready · works on the app before the change";
+    case "kept": return "kept · needs something this change adds, so it only works on the changed app";
     case "not_ready": return h`<span class="tint warn">not ready${check.problem ? ` · ${check.problem}` : ""}</span>`;
     case "interrupted": return "interrupted · the run ended before this check finished";
     default: return "waiting";
