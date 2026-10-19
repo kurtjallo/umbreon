@@ -2,11 +2,12 @@ import { appendFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describeStep, phaseOf, type Phase } from "./report.ts";
 import { checksOf, stepsOf, type Scenario } from "./scenario.ts";
-import type { Evidence, Outcome, StepResult, Verdict } from "./verdict.ts";
+import type { Evidence, Halt, Outcome, Stage, StepResult, Verdict } from "./verdict.ts";
 
-/** baseline runs the frozen checks on the app before the change, after every check passed on the changed app. */
-export type EventStage = "repo" | "look" | "plan" | "rehearse" | "repair" | "drive" | "baseline";
 export type RunPhase = "drive" | "baseline";
+export type CallPurpose = "sort" | "plan" | "repair";
+/** Rehearsal runs a check on the app before the change, and again on the changed app when the check needs something the change adds. */
+export type Side = "old" | "new";
 
 export type PlanSummary = {
   claims: { id: string; quote: string; it: string; checks: { id: string; it: string; steps: { phase: Phase; text: string }[] }[] }[];
@@ -14,18 +15,25 @@ export type PlanSummary = {
   uncovered: string[];
 };
 
-/** Paths in events are relative to the run folder, so a viewer can serve them without knowing where runs live. */
+/**
+ * Paths in events are relative to the run folder, so a viewer can serve them without knowing where runs live.
+ * Repair calls happen inside the rehearse stage; an accepted repair sends a new unfrozen `plan`.
+ * A later `step` with the same check, phase and index replaces the earlier one: the runner rewrites the last step when the app died.
+ */
 export type RunEventBody =
   | { type: "run_started"; runId: string; caseName: string; pid: number; capMs: number }
-  | { type: "stage_started"; stage: EventStage }
+  | { type: "stage_started"; stage: Stage }
   | { type: "repo_ready"; base: string; commit: string }
-  | { type: "model_call"; purpose: "plan" | "repair"; ok: boolean; ms: number; inputTokens: number; outputTokens: number; costUsd: number | null; problems: string[] }
+  | { type: "look_ready"; files: number; truncated: boolean }
+  | { type: "model_call_started"; purpose: CallPurpose }
+  | { type: "model_call"; purpose: CallPurpose; ok: boolean; ms: number; inputTokens: number; outputTokens: number; problems: string[] }
   | { type: "plan"; frozen: boolean; sha256: string | null; plan: PlanSummary }
-  | { type: "check_started"; phase: "rehearse" | RunPhase; checkId: string }
+  | { type: "check_started"; phase: "rehearse"; side: Side; checkId: string }
+  | { type: "check_started"; phase: RunPhase; checkId: string }
   | { type: "step"; phase: RunPhase; checkId: string; index: number; status: StepResult["status"]; atMs: number | null; detail: string | null; screenshot: string | null }
-  | { type: "check_finished"; phase: "rehearse"; checkId: string; ready: boolean; problem: string | null }
+  | { type: "check_finished"; phase: "rehearse"; side: Side; checkId: string; ready: boolean; problem: string | null }
   | { type: "check_finished"; phase: RunPhase; checkId: string; result: "passed" | "failed" | "could_not_run"; problem: string | null; video: string | null }
-  | { type: "verdict"; kind: Verdict["kind"]; commit: string | null; checks: { checkId: string; result: Outcome["result"] }[]; halt: string | null };
+  | { type: "verdict"; kind: Verdict["kind"]; commit: string | null; checks: { checkId: string; result: Outcome["result"] }[]; halt: Pick<Halt, "stage" | "reason"> | null; reasons: string[] };
 
 export type RunEvent = RunEventBody & { seq: number; at: string };
 

@@ -3,23 +3,25 @@ import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, posix, resolve, sep } from "node:path";
-import { EVENTS_FILE, parseEvents, type EventStage, type PlanSummary, type RunEvent, type RunPhase } from "./events.ts";
+import { EVENTS_FILE, parseEvents, type CallPurpose, type PlanSummary, type RunEvent, type RunPhase, type Side } from "./events.ts";
 import type { Phase } from "./report.ts";
-import type { Outcome, StepResult, Verdict } from "./verdict.ts";
+import type { Halt, Outcome, Stage, StepResult, Verdict } from "./verdict.ts";
 
 export type RunStatus = "running" | "stuck" | "stopped" | Verdict["kind"];
 
 /** `stuck` and `halted` mark the stage the run is in when it went quiet or ended without finishing it. */
 export type StageState = "todo" | "now" | "stuck" | "done" | "halted";
-export type StageView = { stage: EventStage; state: StageState; ms: number; calls: number };
+export type StageView = { stage: Stage; state: StageState; ms: number; calls: number };
 
-export type Purpose = "plan" | "repair";
-export type CallView = { n: number; purpose: Purpose; ok: boolean; ms: number; inputTokens: number; outputTokens: number; costUsd: number | null; problems: string[] };
-/** The model call the run is waiting on right now: its stage only ever waits on a model. */
-export type PendingCall = { n: number; purpose: Purpose; ms: number };
+export type CallView = { n: number; purpose: CallPurpose; ok: boolean; ms: number; inputTokens: number; outputTokens: number; problems: string[] };
+/** The model call the run is waiting on right now. `ms` counts from the call's start. */
+export type PendingCall = { n: number; purpose: CallPurpose; ms: number };
 
-/** `interrupted`: the check was rehearsing or running when the run ended, and the verdict did not judge it. */
-export type CheckState = "waiting" | "rehearsing" | "ready" | "not_ready" | "running" | "interrupted" | Outcome["result"];
+/**
+ * `kept`: not ready on the app before the change but ready on the changed app, so the check needs something the change adds.
+ * `interrupted`: the check was rehearsing or running when the run ended, and the verdict did not judge it.
+ */
+export type CheckState = "waiting" | "rehearsing" | "ready" | "kept" | "not_ready" | "running" | "interrupted" | Outcome["result"];
 export type StepStatus = StepResult["status"] | "todo" | "now";
 export type StepView = { phase: Phase; text: string; status: StepStatus; detail: string | null; screenshot: string | null; atMs: number | null };
 /** Paths relative to the run folder. Set once the check has been driven. */
@@ -39,6 +41,8 @@ export type CheckView = {
   id: string;
   it: string;
   state: CheckState;
+  /** The app the check last rehearsed on. Null until its first rehearsal starts. */
+  rehearsedOn: Side | null;
   problem: string | null;
   steps: StepView[];
   latestScreenshot: { path: string; step: number } | null;
@@ -47,7 +51,9 @@ export type CheckView = {
 };
 export type ClaimView = { id: string; quote: string; it: string; checks: CheckView[] };
 export type PlanView = { sha256: string | null; frozen: boolean; claims: ClaimView[]; notTestable: PlanSummary["notTestable"]; uncovered: string[] };
-export type VerdictView = { kind: Verdict["kind"]; commit: string | null; halt: string | null; total: number; counts: Record<Outcome["result"], number> };
+export type HaltView = Pick<Halt, "stage" | "reason">;
+/** `reasons` are the report's lines on why the run is not proven, indented sub-lines included. */
+export type VerdictView = { kind: Verdict["kind"]; commit: string | null; halt: HaltView | null; reasons: string[]; total: number; counts: Record<Outcome["result"], number> };
 
 export type RunView = {
   runId: string;
@@ -55,17 +61,18 @@ export type RunView = {
   status: RunStatus;
   base: string | null;
   commit: string | null;
+  look: { files: number; truncated: boolean } | null;
   startedAt: string;
   lastEventAt: string;
   elapsedMs: number;
   quietMs: number;
   quietLimitMs: number;
   capMs: number;
-  stage: EventStage;
+  stage: Stage;
   stages: StageView[];
   calls: CallView[];
   pendingCall: PendingCall | null;
-  totals: { inputTokens: number; outputTokens: number; costUsd: number | null };
+  totals: { inputTokens: number; outputTokens: number };
   plan: PlanView | null;
   verdict: VerdictView | null;
 };
@@ -73,20 +80,28 @@ export type RunView = {
 export type RunSummary = Pick<RunView, "runId" | "caseName" | "status" | "startedAt" | "elapsedMs">;
 export type DashboardPayload = { runs: RunSummary[]; view: RunView | null };
 
+type StageRule = { quietLimitMs: number; optional: boolean };
 /**
- * One row per stage, in strip order. Optional stages show only when the run went through them.
- * A stage looks stuck after its quiet limit: every model call (capped at 180 s) and every browser step ends with an event.
+ * One row per stage, in strip order. Optional stages show only when the run went through them: file plans skip sort,
+ * and baseline runs only when every check passed. A stage looks stuck after its quiet limit. Drive and baseline send
+ * an event per browser step. Rehearsal sends none, and a page load takes up to 15 s and a step up to 20 s. Sort and
+ * plan wait at most 30 s between calls; a call in flight has its own limit, MODEL_CALL_QUIET_MS.
  */
-const STAGES: Record<EventStage, { quietLimitMs: number; optional: boolean }> = {
+const STAGES: Record<Stage, StageRule> = {
   repo: { quietLimitMs: 60_000, optional: false },
   look: { quietLimitMs: 60_000, optional: false },
-  plan: { quietLimitMs: 210_000, optional: false },
-  rehearse: { quietLimitMs: 60_000, optional: false },
-  repair: { quietLimitMs: 210_000, optional: true },
+  sort: { quietLimitMs: 30_000, optional: true },
+  plan: { quietLimitMs: 30_000, optional: false },
+  rehearse: { quietLimitMs: 120_000, optional: false },
   drive: { quietLimitMs: 60_000, optional: false },
   baseline: { quietLimitMs: 60_000, optional: true },
 };
-const STAGE_ORDER = Object.keys(STAGES) as EventStage[];
+const STAGE_ORDER = Object.keys(STAGES) as Stage[];
+/** A log written by another version may name a stage this table lacks. It gets a plain limit instead of taking the run off the page. */
+const UNKNOWN_STAGE: StageRule = { quietLimitMs: 60_000, optional: true };
+const ruleOf = (stage: Stage): StageRule => STAGES[stage] ?? UNKNOWN_STAGE;
+/** The planner cuts a call off at 180 s (`CALL_TIMEOUT_MS` in planner.ts, not exported). 30 s more covers the event that follows. */
+const MODEL_CALL_QUIET_MS = 180_000 + 30_000;
 
 type StatusFacts = { verdict: Verdict["kind"] | null; alive: boolean; quietMs: number; quietLimitMs: number };
 /** The first rule that answers decides the status; when none does, the run is running. */
@@ -99,7 +114,10 @@ const CURRENT_STAGE: Record<RunStatus, StageState> = { running: "now", stuck: "s
 
 type StepEvent = Extract<RunEvent, { type: "step" }>;
 type PlanCheck = PlanSummary["claims"][number]["checks"][number];
-type Rehearsal = { state: "rehearsing" | "ready" | "not_ready"; problem: string | null };
+type Rehearsal = { state: "rehearsing" | "ready" | "kept" | "not_ready"; side: Side; problem: string | null };
+/** A check that rehearses fine on the app before the change is ready. One that only works on the changed app is kept. */
+const READY_ON: Record<Side, Rehearsal["state"]> = { old: "ready", new: "kept" };
+type StartedCall = { purpose: CallPurpose; at: number };
 type PhaseRun = { state: "running" | RunResult; problem: string | null; video: string | null; steps: Map<number, StepEvent> };
 /** Everything the events said about one check. Each phase keeps its own steps, so a baseline rerun never overwrites the drive. */
 type CheckLog = { rehearsal: Rehearsal | null; runs: Partial<Record<RunPhase, PhaseRun>> };
@@ -164,6 +182,7 @@ function checkView(check: PlanCheck, log: CheckLog | undefined, judged: Outcome[
     id: check.id,
     it: check.it,
     state,
+    rehearsedOn: log?.rehearsal?.side ?? null,
     problem: drive && drive.state !== "running" ? drive.problem : log?.rehearsal?.problem ?? null,
     steps,
     latestScreenshot,
@@ -176,10 +195,12 @@ function checkView(check: PlanCheck, log: CheckLog | undefined, judged: Outcome[
 export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): RunView {
   const started = events[0];
   if (started?.type !== "run_started") throw new Error("a run's events start with run_started");
-  let stage: EventStage = "repo";
-  const intervals: { stage: EventStage; from: number }[] = [{ stage, from: ms(started.at) }];
-  const callsIn = new Map<EventStage, number>();
+  let stage: Stage = "repo";
+  const intervals: { stage: Stage; from: number }[] = [{ stage, from: ms(started.at) }];
+  const callsIn = new Map<Stage, number>();
   const calls: CallView[] = [];
+  /** Calls started and not yet answered, oldest first. A `model_call` answers the oldest one with its purpose. */
+  const inFlight: StartedCall[] = [];
   const logs = new Map<string, CheckLog>();
   const logOf = (checkId: string): CheckLog => {
     const log = logs.get(checkId) ?? { rehearsal: null, runs: {} };
@@ -187,8 +208,8 @@ export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): 
     return log;
   };
   let repo: { base: string; commit: string } | null = null;
+  let look: RunView["look"] = null;
   let plan: Extract<RunEvent, { type: "plan" }> | null = null;
-  let plannedInStage = false;
   let verdict: Extract<RunEvent, { type: "verdict" }> | null = null;
 
   for (const event of events) {
@@ -198,22 +219,29 @@ export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): 
       case "stage_started":
         if (event.stage !== stage) intervals.push({ stage: event.stage, from: ms(event.at) });
         stage = event.stage;
-        plannedInStage = false;
         break;
       case "repo_ready":
         repo = { base: event.base, commit: event.commit };
         break;
-      case "model_call":
-        calls.push({ n: calls.length + 1, purpose: event.purpose, ok: event.ok, ms: event.ms, inputTokens: event.inputTokens, outputTokens: event.outputTokens, costUsd: event.costUsd, problems: event.problems });
+      case "look_ready":
+        look = { files: event.files, truncated: event.truncated };
+        break;
+      case "model_call_started":
+        inFlight.push({ purpose: event.purpose, at: ms(event.at) });
+        break;
+      case "model_call": {
+        const answered = inFlight.findIndex((call) => call.purpose === event.purpose);
+        if (answered !== -1) inFlight.splice(answered, 1);
+        calls.push({ n: calls.length + 1, purpose: event.purpose, ok: event.ok, ms: event.ms, inputTokens: event.inputTokens, outputTokens: event.outputTokens, problems: event.problems });
         callsIn.set(stage, (callsIn.get(stage) ?? 0) + 1);
         break;
+      }
       case "plan":
         forgetChanged(logs, plan?.plan ?? null, event.plan);
         plan = event;
-        plannedInStage = true;
         break;
       case "check_started":
-        if (event.phase === "rehearse") logOf(event.checkId).rehearsal = { state: "rehearsing", problem: null };
+        if (event.phase === "rehearse") logOf(event.checkId).rehearsal = { state: "rehearsing", side: event.side, problem: null };
         else logOf(event.checkId).runs[event.phase] = { state: "running", problem: null, video: null, steps: new Map() };
         break;
       case "step":
@@ -221,7 +249,7 @@ export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): 
         break;
       case "check_finished":
         if (event.phase === "rehearse") {
-          logOf(event.checkId).rehearsal = { state: event.ready ? "ready" : "not_ready", problem: event.problem };
+          logOf(event.checkId).rehearsal = { state: event.ready ? READY_ON[event.side] : "not_ready", side: event.side, problem: event.problem };
         } else {
           const log = logOf(event.checkId);
           log.runs[event.phase] = { state: event.result, problem: event.problem, video: event.video, steps: log.runs[event.phase]?.steps ?? new Map() };
@@ -230,29 +258,32 @@ export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): 
       case "verdict":
         verdict = event;
         break;
+      default:
+        event satisfies never;
     }
   }
 
   const lastEventAt = events[events.length - 1].at;
   const lastEventMs = ms(lastEventAt);
-  const facts: StatusFacts = { verdict: verdict?.kind ?? null, alive, quietMs: now.getTime() - lastEventMs, quietLimitMs: STAGES[stage].quietLimitMs };
+  const waitingOn = inFlight[0] ?? null;
+  const quiet = waitingOn ? { from: waitingOn.at, limitMs: MODEL_CALL_QUIET_MS } : { from: lastEventMs, limitMs: ruleOf(stage).quietLimitMs };
+  const facts: StatusFacts = { verdict: verdict?.kind ?? null, alive, quietMs: now.getTime() - quiet.from, quietLimitMs: quiet.limitMs };
   const status = STATUS_RULES.map((rule) => rule(facts)).find((answer) => answer !== null) ?? "running";
   const live = status === "running" || status === "stuck";
   const end = verdict ? ms(verdict.at) : live ? now.getTime() : lastEventMs;
-  const quietMs = Math.max(0, end - lastEventMs);
+  const quietMs = Math.max(0, end - quiet.from);
 
-  const spent = new Map<EventStage, number>();
+  const spent = new Map<Stage, number>();
   intervals.forEach(({ stage: s, from }, i) => spent.set(s, (spent.get(s) ?? 0) + Math.max(0, (intervals[i + 1]?.from ?? end) - from)));
   const currentState = verdict?.halt ? "halted" : CURRENT_STAGE[status];
-  const stages = STAGE_ORDER.filter((s) => spent.has(s) || !STAGES[s].optional).map((s): StageView => ({
+  const order = [...STAGE_ORDER, ...[...spent.keys()].filter((s) => !(s in STAGES))];
+  const stages = order.filter((s) => spent.has(s) || !ruleOf(s).optional).map((s): StageView => ({
     stage: s,
     state: s === stage ? currentState : spent.has(s) ? "done" : "todo",
     ms: spent.get(s) ?? 0,
     calls: callsIn.get(s) ?? 0,
   }));
 
-  const waitingOn = live && !plannedInStage && (stage === "plan" || stage === "repair") ? stage : null;
-  const costs = calls.flatMap((call) => (call.costUsd === null ? [] : [call.costUsd]));
   const judged = new Map(verdict?.checks.map((check) => [check.checkId, check.result]));
   const counts: Record<Outcome["result"], number> = { passed: 0, failed: 0, could_not_run: 0, evidence_missing: 0 };
   for (const check of verdict?.checks ?? []) counts[check.result]++;
@@ -263,20 +294,20 @@ export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): 
     status,
     base: repo?.base ?? null,
     commit: verdict?.commit ?? repo?.commit ?? null,
+    look,
     startedAt: started.at,
     lastEventAt,
     elapsedMs: Math.max(0, end - ms(started.at)),
     quietMs,
-    quietLimitMs: STAGES[stage].quietLimitMs,
+    quietLimitMs: quiet.limitMs,
     capMs: started.capMs,
     stage,
     stages,
     calls,
-    pendingCall: waitingOn ? { n: calls.length + 1, purpose: waitingOn, ms: quietMs } : null,
+    pendingCall: live && waitingOn ? { n: calls.length + 1, purpose: waitingOn.purpose, ms: quietMs } : null,
     totals: {
       inputTokens: calls.reduce((sum, call) => sum + call.inputTokens, 0),
       outputTokens: calls.reduce((sum, call) => sum + call.outputTokens, 0),
-      costUsd: calls.length > 0 && costs.length === 0 ? null : costs.reduce((sum, cost) => sum + cost, 0),
     },
     plan: plan && {
       sha256: plan.sha256,
@@ -290,7 +321,7 @@ export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): 
       notTestable: plan.plan.notTestable,
       uncovered: plan.plan.uncovered,
     },
-    verdict: verdict && { kind: verdict.kind, commit: verdict.commit, halt: verdict.halt, total: verdict.checks.length, counts },
+    verdict: verdict && { kind: verdict.kind, commit: verdict.commit, halt: verdict.halt, reasons: verdict.reasons, total: verdict.checks.length, counts },
   };
 }
 
