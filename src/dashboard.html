@@ -333,7 +333,7 @@ function pendingLine(check) {
   switch (check.state) {
     case "rehearsing": return h`${LIVE_DOT}rehearsing on ${APP_NAME[check.rehearsedOn] ?? "the app"}`;
     case "ready": return "ready · works on the app before the change";
-    case "kept": return "kept · needs something this change adds, so it only works on the changed app";
+    case "kept": return "kept · works on the changed app only, so it needs something this change adds";
     case "not_ready": return h`<span class="tint warn">not ready${check.problem ? ` · ${check.problem}` : ""}</span>`;
     case "interrupted": return "interrupted · the run ended before this check finished";
     default: return "waiting";
@@ -363,7 +363,10 @@ function checkDetail(check, steps) {
     case "could_not_run": {
       const at = steps.find((step) => step.status === check.state);
       const problem = check.problem && check.problem !== at?.detail ? line("Problem", check.problem) : "";
-      if (!at && !problem && check.state === "could_not_run") return h`<div class="dim">this check never ran</div>`;
+      if (!at && !problem && check.state === "could_not_run") {
+        const done = steps.filter((step) => step.status !== "todo" && step.status !== "now").length;
+        return h`<div class="dim">${done === 0 ? "this check never ran" : `the run stopped after step ${done} of ${steps.length}`}</div>`;
+      }
       if (!at) return problem;
       return h`${line(check.state === "failed" ? "Failed" : "Could not run", h`step ${at.n} · <code>${at.text}</code>`)}${at.detail ? line("Why", at.detail) : ""}${problem}`;
     }
