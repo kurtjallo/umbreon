@@ -81,12 +81,14 @@ export type FrozenScenario = Scenario & {
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const HEADING = /^ {0,3}#{1,6}(\s|$)/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+\.)\s+/;
+const SENTENCE_END = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|vs|cf)\.)\s+/i;
 
 /**
- * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space. Headings are dropped.
+ * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space, except after "e.g.",
+ * "i.e.", "vs." or "cf.", which sit mid-sentence. Headings are dropped.
  * A list item ends before the next line that is not indented under it, so "- Undo" is not glued to the sentence below.
  * A one-word unit counts, because "Undo" can be a promise. A piece shorter than 8 characters counts only when it is the
- * whole unit, so a cut such as "e.g." is dropped and "N/A" is kept. A repeated sentence counts once.
+ * whole unit, so a cut such as "Wait..." is dropped and "N/A" is kept. A repeated sentence counts once.
  */
 export function sentencesOf(prText: string): string[] {
   const units: string[] = [];
@@ -97,7 +99,7 @@ export function sentencesOf(prText: string): string[] {
     buf = [];
     kind = null;
     if (!text) return;
-    const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+    const parts = text.split(SENTENCE_END).filter(Boolean);
     units.push(...(parts.length === 1 ? parts : parts.filter((part) => part.length >= SHORT_QUOTE)));
   };
   for (const line of prText.split("\n")) {
