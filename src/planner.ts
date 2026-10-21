@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel, type LanguageModelUsage } from "ai";
 import { z } from "zod";
+import { firstLine } from "./report.ts";
 import {
   CheckSchema, NotTestableSchema, ScenarioSchema, planProblems, replaceChecks, sentencesOf,
   type NotTestable, type PlanSource, type Scenario, type UiReference,
@@ -102,7 +103,7 @@ async function ask<T, R>(
     got = parsed.success ? { ok: true, value: parsed.data } : { ok: false, problems: issuesOf(parsed.error) };
   } catch (error) {
     if (signal.aborted) throw error;
-    let problem = String(error instanceof Error ? error.message : error).split("\n")[0].slice(0, 300);
+    let problem = firstLine(error).slice(0, 300);
     if (timeout.aborted) problem = `the call took over ${CALL_TIMEOUT_MS / 1000} s and was cut off`;
     else if (NoObjectGeneratedError.isInstance(error)) {
       usage = tokensOf(error.usage);

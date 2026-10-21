@@ -33,10 +33,12 @@ export function stepName(check: Check, index: number): string {
   return `${phase} step ${index - first + 1} ${describeStep(stepsOf(check)[index])}`;
 }
 
+export const firstLine = (error: unknown) => String(error instanceof Error ? error.message : error).split("\n")[0];
+
 const MARK: Record<Outcome["result"], string> = { passed: "✅", failed: "❌", could_not_run: "⊘", evidence_missing: "⊘" };
 
 const short = (sha: string) => sha.slice(0, 7);
-const tokens = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`);
+export const tokens = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`);
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
 
 function header(record: RunRecord): string {

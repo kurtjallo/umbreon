@@ -3,6 +3,7 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { SetupError } from "../src/app.ts";
+import { tokens } from "../src/report.ts";
 import { checksOf } from "../src/scenario.ts";
 import type { RunRecord, Verdict } from "../src/verdict.ts";
 import { plannerModel, verify, type PlanChoice } from "../src/verify.ts";
@@ -27,8 +28,6 @@ async function expectedOf(caseDir: string): Promise<Expected> {
   if (verdict !== "PROVEN" && verdict !== "NOT PROVEN") throw new SetupError(`${caseDir}/expected.json has no verdict PROVEN or NOT PROVEN`);
   return verdict;
 }
-
-const tokens = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`);
 
 function planText(record: RunRecord): string {
   const source = record.scenario?.source;

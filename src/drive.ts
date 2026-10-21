@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserContext, BrowserContextOptions, Locator as Found, Page } from "playwright";
 import type { RunningApp } from "./app.ts";
-import { phaseOf, stepName, type Phase } from "./report.ts";
+import { firstLine, phaseOf, stepName, type Phase } from "./report.ts";
 import { describeLocator, isAbsence, stepsOf, type Assertion, type Check, type Locator, type NumberedCheck, type Step, type UiReference } from "./scenario.ts";
 import type { Cause, CheckRun, Evidence, StepResult } from "./verdict.ts";
 
@@ -31,7 +31,6 @@ const hung = cannot("page_hung", `the step did not finish in ${STEP_MS / 1000} s
 const lost: Evidence = { state: "missing", reason: "the page hung" };
 const LATE = Symbol("late");
 const HANG = Symbol("hang");
-const firstLine = (error: unknown) => String(error instanceof Error ? error.message : error).split("\n")[0];
 const matches = (n: number) => `${n} visible match${n === 1 ? "" : "es"}`;
 const quoted = (texts: readonly string[]) => (texts.length ? texts.map((text) => JSON.stringify(text)).join(", ") : "nothing");
 const textOf = (problem: Problem) => (problem.status === "failed" ? `expected ${problem.expected}, saw ${problem.observed}` : problem.detail);

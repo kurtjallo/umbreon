@@ -11,7 +11,7 @@ import { openEventLog, relativeEvidence, stepEvent, summarizePlan, type CallPurp
 import {
   planScenario, renderPlannerInput, renderSortInput, repairChecks, sortSentences, type CallObserver, type CallRecord, type FailingCheck, type PlannerInput,
 } from "./planner.ts";
-import { blockerLines, renderReport, stepProblem } from "./report.ts";
+import { blockerLines, firstLine, renderReport, stepProblem } from "./report.ts";
 import {
   ScenarioSchema, checksOf, freeze, planProblems, uncoveredSentences, type FrozenScenario, type NumberedCheck, type Scenario,
 } from "./scenario.ts";
@@ -28,7 +28,6 @@ export const RUNS_DIR = join(REPO, "runs");
 const RUN_CAP_MS = 480_000;
 const REPAIR_ROUNDS = 2;
 
-const firstLine = (error: unknown) => String(error instanceof Error ? error.message : error).split("\n")[0];
 const stopped = (step: CheckRun["steps"][number]): step is FailedStep | CouldNotRunStep => step.status === "failed" || step.status === "could_not_run";
 
 /** The model from agent/agent.ts, so the model id has one source. Reads .env.local first, because the key lives there. */
