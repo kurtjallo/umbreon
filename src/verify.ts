@@ -16,7 +16,7 @@ import {
   ScenarioSchema, checksOf, freeze, planProblems, uncoveredSentences, type FrozenScenario, type NumberedCheck, type Scenario,
 } from "./scenario.ts";
 import {
-  decide, failureBefore, outcomesOf, showsChangeAdds, type CheckRun, type CouldNotRunStep, type FailedStep, type Halt, type RunRecord, type Stage,
+  decide, failureBefore, outcomesOf, type CheckRun, type CouldNotRunStep, type FailedStep, type Halt, type RunRecord, type Stage,
 } from "./verdict.ts";
 
 export type PlanChoice = { kind: "model"; model: LanguageModel } | { kind: "file"; path: string };
@@ -194,9 +194,8 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
       // Repair cannot fix a missing new control or an absence the old app never shows, so those checks are kept. Neither
       // is proof. Proof is a "then" assertion that ran and failed. The new app can only stop a repair, never shape one.
       const addedByChange = (check: NumberedCheck, problem: RehearsalProblem) =>
-        showsChangeAdds(check, problem)
-        || (problem.status === "could_not_run" && problem.cause === "gone_rule")
-        || (problem.status === "could_not_run" && problem.cause === "no_match" && problem.index >= check.given.length);
+        problem.status === "could_not_run"
+        && (problem.cause === "gone_rule" || (problem.cause === "no_match" && problem.index >= check.given.length));
       // A stopped app says nothing about the check, so repair would rewrite a check that may be right. The drive stage decides it.
       const appDown = (problem: RehearsalProblem) => problem.status === "could_not_run" && problem.cause === "app_down";
       const rehearse = async (checks: readonly NumberedCheck[]): Promise<FailingCheck[]> => {
