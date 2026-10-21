@@ -197,13 +197,18 @@ export async function verify(caseDir: string, options: VerifyOptions): Promise<R
         showsChangeAdds(check, problem)
         || (problem.status === "could_not_run" && problem.cause === "gone_rule")
         || (problem.status === "could_not_run" && problem.cause === "no_match" && problem.index >= check.given.length);
+      // A stopped app says nothing about the check, so repair would rewrite a check that may be right. The drive stage decides it.
+      const appDown = (problem: RehearsalProblem) => problem.status === "could_not_run" && problem.cause === "app_down";
       const rehearse = async (checks: readonly NumberedCheck[]): Promise<FailingCheck[]> => {
         const failing: FailingCheck[] = [];
         for (const check of checks) {
           signal.throwIfAborted();
           const problem = await rehearseOn("old", check);
-          if (problem === null) continue;
-          if (addedByChange(check, problem) && (await rehearseOn("new", check)) === null) continue;
+          if (problem === null || appDown(problem)) continue;
+          if (addedByChange(check, problem)) {
+            const onNew = await rehearseOn("new", check);
+            if (onNew === null || appDown(onNew)) continue;
+          }
           failing.push({ claimIndex: check.claimIndex, checkIndex: check.checkIndex, id: check.id, problem: problem.text });
         }
         return failing;
