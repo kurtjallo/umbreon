@@ -223,6 +223,36 @@ suite("verify", { concurrency: 3 }, () => {
     assert.equal(record.verdict.failsBefore.checkId, "c1.1");
   });
 
+  test("a check the app stops running under during rehearsal is not sent to repair, and the drive stage decides it", async () => {
+    const dir = await mkdtemp(join(REPO, "practice/demo-todo/prs/dies-on-add-"));
+    try {
+      // The changed app answers the look stage, then exits on the first POST, which every check's setup sends.
+      const diff = (await readFile(join(caseDir("clear-completed-correct"), "change.diff"), "utf8"))
+        .replace("@@ -50,6 +50,7 @@", "@@ -50,6 +50,8 @@")
+        .replace("+const deleteCompleted", '+setImmediate(() => server.prependListener("request", (req) => req.method === "POST" && process.exit(1)));\n+const deleteCompleted')
+        .replace("@@ -148,6 +149,13 @@", "@@ -148,6 +150,13 @@");
+      await writeFile(join(dir, "change.diff"), diff);
+      await copyFile(join(caseDir("clear-completed-correct"), "pr.md"), join(dir, "pr.md"));
+      const claims = structuredClone(JSON.parse(await readFile(CLEAR_PLAN, "utf8")).claims);
+      claims[2].checks[1].given.pop();
+      const model = new MockLanguageModelV4({ doGenerate: [reply(CLEAR_SORT), reply({ claims })] });
+      const events: RunEvent[] = [];
+      const record = await verify(dir, { plan: { kind: "model", model }, runsDir, onEvent: (event) => events.push(event) });
+      const log = events.map(lineOf).filter((line) => line !== null).join("\n");
+      for (const id of ["c1.2", "c2.1", "c3.1", "c3.2"]) {
+        const seen = rehearsed(events, id);
+        assert.deepEqual(seen.map(({ side, ready }) => [side, ready]), [["old", false], ["new", false]], `${id}\n${log}`);
+        assert.match(seen[1].problem ?? "", /^app down: /, `${id}\n${log}`);
+      }
+      assert.deepEqual(callsOf(events), ["sort", "plan"], log);
+      assert.ok(record.verdict.kind === "NOT PROVEN", JSON.stringify(record.verdict));
+      assert.deepEqual(record.verdict.blockers, [{ reason: "check_did_not_pass" }]);
+      assert.deepEqual(record.runs.map((run) => run.checkId), checksOf(record.scenario!).map((check) => check.id), "every check was driven");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a model plan whose check forgot its setup still gets a repair call, with only that check and the old app's problem", async () => {
     const good = JSON.parse(await readFile(CLEAR_PLAN, "utf8"));
     const forgot = { claims: structuredClone(good.claims) };
