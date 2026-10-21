@@ -22,6 +22,13 @@ before(async () => {
 });
 after(() => rm(tmp, { recursive: true, force: true }));
 
+const GIT_ENV = {
+  ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@localhost", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@localhost",
+};
+const commitRepo = async (dir: string) => {
+  for (const args of [["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "app"]]) await exec("git", ["-C", dir, ...args], { env: GIT_ENV });
+};
 const exists = (path: string) => stat(path).then(() => true, () => false);
 const listen = (server: http.Server) => new Promise<string>((done) => {
   server.listen(0, "127.0.0.1", () => {
@@ -114,6 +121,25 @@ test("loadCase rejects a pr.md whose first line has no title, naming the file", 
     await writeFile(join(dir, "pr.md"), `${firstLine}\nDelete keeps focus in the list.\n`);
     await assert.rejects(loadCase(dir), (e) => e instanceof SetupError && e.message.includes(join(dir, "pr.md")), name);
   }
+});
+
+test("loadCase rejects an app with uncommitted changes outside prs/, because the run tests the committed app", async () => {
+  const app = join(tmp, "dirty-app");
+  const dir = join(app, "prs", "delete-correct");
+  await cp(CASE_DIR, dir, { recursive: true });
+  await writeFile(join(app, "package.json"), "{}");
+  await writeFile(join(app, "server.js"), "// v1\n");
+  await commitRepo(app);
+  await writeFile(join(dir, "notes.txt"), "a change to a case is not a change to the app\n");
+  assert.equal((await loadCase(dir)).name, "delete-correct", "a change under prs/ is allowed");
+
+  const rejects = (file: string) =>
+    assert.rejects(loadCase(dir), (e) => e instanceof SetupError && /commit or stash/.test(e.message) && e.message.includes(file), file);
+  await writeFile(join(app, "server.js"), "// v2\n");
+  await rejects("server.js");
+  await writeFile(join(app, "server.js"), "// v1\n");
+  await writeFile(join(app, "extra.js"), "// not yet added\n");
+  await rejects("extra.js");
 });
 
 test("prepareApp gives the same commits every time and leaves prs/ out", async () => {
