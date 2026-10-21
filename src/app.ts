@@ -206,10 +206,13 @@ async function waitReady(name: string, url: string, signal: AbortSignal, logs: (
 // so a 3xx to anywhere else must not be requested, and a 200 from there must not count as ready.
 export async function answers200(url: string, signal: AbortSignal): Promise<boolean> {
   const origin = new URL(url).origin;
+  const poll = AbortSignal.any([signal, AbortSignal.timeout(2_000)]);
+  const seen = new Set<string>();
   let current = url;
-  for (let hop = 0; hop < 5; hop++) {
-    try {
-      const res = await fetch(current, { redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(2_000)]) });
+  try {
+    while (!seen.has(current)) {
+      seen.add(current);
+      const res = await fetch(current, { redirect: "manual", signal: poll });
       await res.arrayBuffer();
       if (res.status === 200) return true;
       if (res.status < 300 || res.status >= 400) return false;
@@ -218,9 +221,9 @@ export async function answers200(url: string, signal: AbortSignal): Promise<bool
       const next = new URL(location, current);
       if (next.origin !== origin) return false;
       current = next.href;
-    } catch {
-      return false;
     }
+  } catch {
+    return false;
   }
   return false;
 }
