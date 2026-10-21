@@ -95,6 +95,7 @@ test("loadCase reads pr.md and change.diff and never expected.json", async () =>
     caseDir: CASE_DIR,
     appDir: APP_DIR,
     prText: await readFile(join(CASE_DIR, "pr.md"), "utf8"),
+    title: "Keep focus in the task list after deleting",
     diffFile: join(CASE_DIR, "change.diff"),
   });
 
@@ -123,7 +124,6 @@ test("prepareApp gives the same commits every time and leaves prs/ out", async (
   assert.equal(a.old.commit, b.old.commit);
   assert.equal(a.new.commit, b.new.commit);
   assert.notEqual(a.old.commit, a.new.commit);
-  assert.equal(a.title, "Keep focus in the task list after deleting");
   for (const dir of [a.old.dir, a.new.dir]) assert.equal(await exists(join(dir, "prs")), false, `${dir} has no prs/`);
 
   const changed = [...a.diff.matchAll(/^diff --git a\/(\S+) /gm)].map((m) => m[1]);

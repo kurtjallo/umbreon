@@ -25,10 +25,10 @@ export const DEMO_TODO: AppProfile = {
 };
 
 // No field for expected.json: the answer key must never reach the planner.
-export type Case = { name: string; caseDir: string; appDir: string; prText: string; diffFile: string };
+export type Case = { name: string; caseDir: string; appDir: string; prText: string; title: string; diffFile: string };
 export type Repo = { dir: string; commit: string };
 export type PreparedApp =
-  | { ok: true; old: Repo; new: Repo; diff: string; title: string }
+  | { ok: true; old: Repo; new: Repo; diff: string }
   | { ok: false; base: string; detail: string };
 export type RunningApp = { origin: string; startUrl: string; alive(): Promise<boolean>; logs(): Promise<string> };
 
@@ -77,14 +77,18 @@ export async function loadCase(caseDir: string): Promise<Case> {
   const dir = resolve(caseDir);
   const appDir = resolve(dir, "../..");
   const diffFile = join(dir, "change.diff");
+  const prFile = join(dir, "pr.md");
+  let prText: string;
   try {
-    const prText = await readFile(join(dir, "pr.md"), "utf8");
+    prText = await readFile(prFile, "utf8");
     await access(diffFile);
     await access(join(appDir, "package.json"));
-    return { name: basename(dir), caseDir: dir, appDir, prText, diffFile };
   } catch (e) {
     throw new SetupError(`${dir} is not a case folder: ${(e as Error).message}`);
   }
+  const title = prText.split("\n", 1)[0].replace(/^#\s*/, "").trim();
+  if (!title) throw new SetupError(`${prFile} has no title: its first line must be the PR title`);
+  return { name: basename(dir), caseDir: dir, appDir, prText, title, diffFile };
 }
 
 export async function prepareApp(c: Case, runDir: string): Promise<PreparedApp> {
@@ -110,10 +114,9 @@ export async function prepareApp(c: Case, runDir: string): Promise<PreparedApp> 
   } catch (e) {
     return { ok: false, base, detail: stderrOf(e) };
   }
-  const title = c.prText.split("\n", 1)[0].replace(/^#\s*/, "").trim();
-  const commit = await commitAll(newDir, title);
+  const commit = await commitAll(newDir, c.title);
   const { stdout: diff } = await git(newDir, ["diff", base, commit]);
-  return { ok: true, old: { dir: oldDir, commit: base }, new: { dir: newDir, commit }, diff, title };
+  return { ok: true, old: { dir: oldDir, commit: base }, new: { dir: newDir, commit }, diff };
 }
 
 async function commitAll(dir: string, message: string): Promise<string> {
