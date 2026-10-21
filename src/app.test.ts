@@ -58,6 +58,31 @@ test("a redirect off the app is not a ready answer, and a redirect on the app is
     app.close();
   }
 });
+test("one readiness poll fetches a redirect loop once and gives up after 2 s in all, however many hops", async () => {
+  let loops = 0;
+  const app = http.createServer((req, res) => {
+    if (req.url === "/loop") { loops++; res.writeHead(302, { Location: "/loop" }); res.end(); return; }
+    const hop = Number(/^\/slow(\d)$/.exec(req.url ?? "")?.[1]);
+    setTimeout(() => {
+      if (hop < 3) res.writeHead(302, { Location: `/slow${hop + 1}` });
+      else res.writeHead(200);
+      res.end();
+    }, 900);
+  });
+  const origin = await listen(app);
+  try {
+    assert.equal(await answers200(`${origin}/loop`, AbortSignal.timeout(10_000)), false);
+    assert.equal(loops, 1, "the loop is fetched once");
+    const started = performance.now();
+    assert.equal(await answers200(`${origin}/slow1`, AbortSignal.timeout(10_000)), false, "three 0.9 s hops do not fit in 2 s");
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2_500, `gave up after ${Math.round(elapsed)} ms`);
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});
+
 const runId = (check: string) => `test-${process.pid}-${check}`;
 
 async function containersOfRun(id: string): Promise<string[]> {
