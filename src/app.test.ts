@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { answers200, AppNeverReady, DEMO_TODO, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
+import { answers200, AppNeverReady, DEMO_TODO, loadCase, preflight, prepareApp, SetupError, sweepOrphans, withApp } from "./app.ts";
 
 const exec = promisify(execFile);
 const APP_DIR = fileURLToPath(new URL("../practice/demo-todo", import.meta.url));
@@ -103,6 +103,16 @@ test("loadCase reads pr.md and change.diff and never expected.json", async () =>
   await writeFile(join(tmp, "locked-app", "package.json"), "{}");
   await chmod(join(copy, "expected.json"), 0o000);
   assert.equal((await loadCase(copy)).prText, c.prText, "loads with expected.json unreadable");
+});
+
+test("loadCase rejects a pr.md whose first line has no title, naming the file", async () => {
+  for (const [name, firstLine] of [["empty", ""], ["hash", "#"], ["hash-space", "#   "]]) {
+    const dir = join(tmp, "untitled-app", "prs", name);
+    await cp(CASE_DIR, dir, { recursive: true });
+    await writeFile(join(tmp, "untitled-app", "package.json"), "{}");
+    await writeFile(join(dir, "pr.md"), `${firstLine}\nDelete keeps focus in the list.\n`);
+    await assert.rejects(loadCase(dir), (e) => e instanceof SetupError && e.message.includes(join(dir, "pr.md")), name);
+  }
 });
 
 test("prepareApp gives the same commits every time and leaves prs/ out", async () => {
