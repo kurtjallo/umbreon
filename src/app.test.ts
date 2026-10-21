@@ -109,6 +109,7 @@ test("loadCase reads pr.md and change.diff and never expected.json", async () =>
   const copy = join(tmp, "locked-app", "prs", "delete-correct");
   await cp(CASE_DIR, copy, { recursive: true });
   await writeFile(join(tmp, "locked-app", "package.json"), "{}");
+  await commitRepo(join(tmp, "locked-app"));
   await chmod(join(copy, "expected.json"), 0o000);
   assert.equal((await loadCase(copy)).prText, c.prText, "loads with expected.json unreadable");
 });

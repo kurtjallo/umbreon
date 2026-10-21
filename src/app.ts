@@ -88,6 +88,11 @@ export async function loadCase(caseDir: string): Promise<Case> {
   }
   const title = prText.split("\n", 1)[0].replace(/^#\s*/, "").trim();
   if (!title) throw new SetupError(`${prFile} has no title: its first line must be the PR title`);
+  // The base app comes from `git archive HEAD`, so an edit that is not committed would be silently left out.
+  const { stdout: dirty } = await git(appDir, ["status", "--porcelain", "--", ".", ":(exclude)prs"]);
+  if (dirty) {
+    throw new SetupError(`${appDir} has uncommitted changes. The run tests the committed app, so commit or stash them first:\n${dirty.trimEnd()}`);
+  }
   return { name: basename(dir), caseDir: dir, appDir, prText, title, diffFile };
 }
 
