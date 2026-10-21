@@ -247,7 +247,6 @@ async function logsOf(name: string): Promise<string> {
   }
 }
 
-/** Removes the containers and networks whose owner process is gone. */
 export async function sweepOrphans(): Promise<string[]> {
   const containers = await orphans(["ps", "-a"], "{{.Names}}");
   const networks = await orphans(["network", "ls"], "{{.Name}}");

@@ -67,9 +67,8 @@ function parsePlan(text: string, path: string, prText: string): { ok: true; scen
 }
 
 /**
- * Runs one case from start to verdict. The order of the steps lives here, in code, and every step of it is written
- * to the run's event log as it happens. Throws only SetupError; every other outcome, an interrupt included, is a
- * RunRecord written to the run folder.
+ * The order of the steps lives here, in code, and every step of it is written to the run's event log as it happens.
+ * Throws only SetupError; every other outcome, an interrupt included, is a RunRecord written to the run folder.
  */
 export async function verify(caseDir: string, options: VerifyOptions): Promise<RunRecord> {
   const cap = AbortSignal.timeout(RUN_CAP_MS);

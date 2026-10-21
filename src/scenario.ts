@@ -65,7 +65,6 @@ export type Scenario = DeepReadonly<z.infer<typeof ScenarioSchema>>;
 export type NotTestable = Scenario["notTestable"][number];
 export type NumberedCheck = Check & { readonly id: string; readonly claimId: string; readonly claimIndex: number; readonly checkIndex: number };
 
-/** What the planner learns about the running app before it writes a plan. */
 export type UiReference = { ariaSnapshot: string; files: { url: string; text: string }[]; truncated: boolean };
 
 export type PlanSource =
@@ -138,7 +137,6 @@ function sentencesContaining(quote: string, prText: string): number[] {
   return sentences.flatMap((sentence, index) => (sentence.includes(needle) ? [index] : []));
 }
 
-/** The sentences these quotes pick out. A quote that matches no sentence, or several, picks out none. */
 function quoted(quotes: readonly { quote: string }[], prText: string): Set<number> {
   return new Set(quotes.flatMap(({ quote }) => {
     const hits = sentencesContaining(quote, prText);
@@ -146,7 +144,6 @@ function quoted(quotes: readonly { quote: string }[], prText: string): Set<numbe
   }));
 }
 
-/** PR sentences that no claim with checks quotes and no not-testable entry marks. */
 export function uncoveredSentences(scenario: Scenario, prText: string): string[] {
   const accounted = quoted([...scenario.claims.filter((claim) => claim.checks.length > 0), ...scenario.notTestable], prText);
   return sentencesOf(prText).filter((_, index) => !accounted.has(index));

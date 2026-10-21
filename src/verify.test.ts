@@ -56,7 +56,6 @@ async function assertEvidence(record: RunRecord): Promise<void> {
 
 const eventsOf = async (record: RunRecord) => parseEvents(await readFile(join(record.dir, "events.jsonl"), "utf8"));
 
-/** Each rehearsal of one check, in order: which app it ran on, whether the check was ready there, and what stopped it. */
 function rehearsed(events: readonly RunEvent[], checkId: string): { side: string; ready: boolean; problem: string | null }[] {
   return events.flatMap((event) => (event.type === "check_finished" && event.phase === "rehearse" && event.checkId === checkId
     ? [{ side: event.side, ready: event.ready, problem: event.problem }]
@@ -103,8 +102,8 @@ async function fromModel(caseName: string, ...replies: unknown[]) {
 type Cli = { code: number | null; stdout: string; stderr: string; pid: number; record: RunRecord | null };
 
 /**
- * Runs the CLI, reads its run.json, and removes the run folder it made under runs/. `interrupt` sends one signal once
- * the run has started, after closing our end of the child's stderr if asked, the way a closed terminal leaves it.
+ * `interrupt` sends one signal once the run has started, after closing our end of the child's stderr if asked, the way
+ * a closed terminal leaves it.
  */
 async function cli(args: string[], interrupt?: { signal: NodeJS.Signals; afterMs: number; closeStderr?: boolean }): Promise<Cli> {
   const child = spawn(process.execPath, ["src/cli.ts", ...args], { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] });

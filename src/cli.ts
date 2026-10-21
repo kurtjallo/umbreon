@@ -53,7 +53,7 @@ async function runVerify(command: Extract<Command, { kind: "verify" }>): Promise
   exit(code, renderReport(record, process.cwd()), process.stdout);
 }
 
-/** Serves the runs folder verify writes to, until the first stop signal. The port's default lives in serveDashboard. */
+/** The port's default lives in serveDashboard. */
 async function runDashboard(command: Extract<Command, { kind: "dashboard" }>): Promise<void> {
   const dashboard = await serveDashboard({ runsDir: RUNS_DIR, port: command.port });
   process.stdout.write(`${dashboard.url}\n`);

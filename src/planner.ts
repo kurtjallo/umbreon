@@ -9,13 +9,11 @@ import {
 
 export type PlannerInput = { prText: string; diff: string; ui: UiReference };
 type Usage = Extract<PlanSource, { kind: "model" }>["usage"];
-/** What a model's answer came to, or why it was rejected. */
 export type Attempt<T> = { ok: true; value: T } | { ok: false; problems: string[] };
 export type FailingCheck = { claimIndex: number; checkIndex: number; id: string; problem: string };
 
-/** One call to the model: whether its answer was accepted, how long it took, what it spent, and why it was rejected. */
 export type CallRecord = Usage & { ok: boolean; ms: number; problems: string[] };
-/** Hears every call as it starts and ends. These records are the only count of calls and tokens. */
+/** These records are the only count of calls and tokens. */
 export type CallObserver = { started(): void; finished(call: CallRecord): void };
 
 /** A file in agent/skills that becomes a call's instructions. */
@@ -70,8 +68,8 @@ function instructionsFor(skill: Skill, schema: z.ZodType): string {
 }
 
 /**
- * One call, reported to the observer with its time and tokens. Throws only when the caller's signal aborts; every
- * other failure, a reply the schema or `accept` rejects included, comes back as problems the retry can show the model.
+ * Throws only when the caller's signal aborts; every other failure, a reply the schema or `accept` rejects included,
+ * comes back as problems the retry can show the model.
  */
 async function ask<T, R>(
   model: LanguageModel,
@@ -117,7 +115,6 @@ async function ask<T, R>(
   return reply;
 }
 
-/** Asks at most twice. The second call shows the model why its first answer was rejected. */
 async function askTwice<T, R>(
   model: LanguageModel,
   skill: Skill,
@@ -148,7 +145,6 @@ export function sortProblems(reply: SortReply, count: number): string[] {
   return problems;
 }
 
-/** Picks the PR sentences that state nothing a user can see, from the sentences alone. Each comes back as its exact text. */
 export async function sortSentences(prText: string, model: LanguageModel, signal: AbortSignal, observer: CallObserver): Promise<Attempt<NotTestable[]>> {
   const sentences = sentencesOf(prText);
   return askTwice(model, "sort-sentences", SortReplySchema, renderSortInput(prText), (reply): Attempt<NotTestable[]> => {
@@ -174,7 +170,6 @@ export async function planScenario(
   }, signal, observer);
 }
 
-/** One call that replaces only the failing checks. A rejected answer leaves the plan as it was. */
 export async function repairChecks(
   input: PlannerInput,
   model: LanguageModel,

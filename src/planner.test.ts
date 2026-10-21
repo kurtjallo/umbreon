@@ -36,7 +36,7 @@ const reply = (value: unknown) => ({
   warnings: [],
 });
 
-/** An observer that keeps every record. `heard()` checks each started call finished, then gives what each call came to and spent. */
+/** `heard()` checks each started call finished, then gives what each call came to and spent. */
 function listen() {
   const calls: CallRecord[] = [];
   let started = 0;

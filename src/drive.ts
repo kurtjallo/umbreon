@@ -274,7 +274,6 @@ async function record(s: Session, dir: string, index: number, atMs: number, prob
 // Closing a context twice is harmless, and closing one whose browser died throws; neither may hide the result.
 const closeQuietly = (s: Session) => s.context.close().catch(() => {});
 
-/** What the planner sees: the start page's ARIA snapshot and the same-origin HTML and JS the page loaded. */
 export async function lookAtApp(browser: Browser, app: RunningApp, signal: AbortSignal): Promise<UiReference> {
   const s = await openSession(browser, app, signal);
   const onHang = () => {
@@ -311,10 +310,7 @@ async function look(s: Session): Promise<UiReference> {
   return { ariaSnapshot, files, truncated };
 }
 
-/**
- * Runs one frozen check on a fresh browser context and records every step, with evidence, into `dir`.
- * `onStep` hears each step as it is recorded, and hears the last step again if the app's death rewrites it.
- */
+/** `onStep` hears each step as it is recorded, and hears the last step again if the app's death rewrites it. */
 export async function runCheck(
   browser: Browser,
   app: RunningApp,
@@ -387,7 +383,6 @@ export async function runCheck(
   }
 }
 
-/** Runs a check's `given`, then the rules checked before `when`, and stops there. Returns null when all of it holds. */
 export async function rehearseCheck(browser: Browser, app: RunningApp, check: Check, signal: AbortSignal): Promise<RehearsalProblem | null> {
   const s = await openSession(browser, app, signal);
   const step = (work: () => Promise<Problem | null>) => bounded(s, () => hung, () => guarded(s, work));
