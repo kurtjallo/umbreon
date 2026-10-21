@@ -7,19 +7,18 @@ import {
 } from "./scenario.ts";
 
 export type PlannerInput = { prText: string; diff: string; ui: UiReference };
-export type Usage = Extract<PlanSource, { kind: "model" }>["usage"];
-/** What a model's answer came to after at most two calls, and what both calls spent. */
-export type Attempt<T> =
-  | { ok: true; value: T; calls: number; usage: Usage }
-  | { ok: false; problems: string[]; calls: number; usage: Usage };
+type Usage = Extract<PlanSource, { kind: "model" }>["usage"];
+/** What a model's answer came to, or why it was rejected. */
+export type Attempt<T> = { ok: true; value: T } | { ok: false; problems: string[] };
 export type FailingCheck = { claimIndex: number; checkIndex: number; id: string; problem: string };
-export type RepairResult = { ok: true; scenario: Scenario; usage: Usage } | { ok: false; problems: string[]; usage: Usage };
+
+/** One call to the model: whether its answer was accepted, how long it took, what it spent, and why it was rejected. */
+export type CallRecord = Usage & { ok: boolean; ms: number; problems: string[] };
+/** Hears every call as it starts and ends. These records are the only count of calls and tokens. */
+export type CallObserver = { started(): void; finished(call: CallRecord): void };
 
 /** A file in agent/skills that becomes a call's instructions. */
 export type Skill = "prove-change" | "sort-sentences";
-
-type Reply<T> = { ok: true; output: T; usage: Usage } | { ok: false; problems: string[]; usage: Usage };
-type Checked<T> = { ok: true; value: T } | { ok: false; problems: string[] };
 
 const CALL_TIMEOUT_MS = 180_000;
 const RepairSchema = z.strictObject({ checks: z.array(CheckSchema).min(1).max(24) });
@@ -58,7 +57,6 @@ export function renderPlannerInput({ prText, diff, ui }: PlannerInput, notTestab
 
 const bullets = (lines: readonly string[]) => lines.map((line) => `- ${line}`).join("\n");
 const tokensOf = (usage?: LanguageModelUsage): Usage => ({ inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 });
-export const addUsage = (a: Usage, b: Usage): Usage => ({ inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens });
 
 const issuesOf = (error: z.ZodError) => error.issues.map((issue) => `${issue.path.join(".") || "answer"}: ${issue.message}`);
 
@@ -70,9 +68,24 @@ function instructionsFor(skill: Skill, schema: z.ZodType): string {
   return `${systemPrompt(skill)}\n\nReply with only one JSON object that matches this JSON Schema:\n${JSON.stringify(z.toJSONSchema(schema, { reused: "ref" }))}`;
 }
 
-/** Throws only when the caller's signal aborts; every other failure comes back as problems the retry can show the model. */
-async function ask<T>(model: LanguageModel, skill: Skill, schema: z.ZodType<T>, prompt: string, signal: AbortSignal): Promise<Reply<T>> {
+/**
+ * One call, reported to the observer with its time and tokens. Throws only when the caller's signal aborts; every
+ * other failure, a reply the schema or `accept` rejects included, comes back as problems the retry can show the model.
+ */
+async function ask<T, R>(
+  model: LanguageModel,
+  skill: Skill,
+  schema: z.ZodType<T>,
+  prompt: string,
+  accept: (output: T) => Attempt<R>,
+  signal: AbortSignal,
+  observer: CallObserver,
+): Promise<Attempt<R>> {
   const timeout = AbortSignal.timeout(CALL_TIMEOUT_MS);
+  observer.started();
+  const startedAt = Date.now();
+  let usage = tokensOf();
+  let got: Attempt<T>;
   try {
     const result = await generateText({
       model,
@@ -84,15 +97,23 @@ async function ask<T>(model: LanguageModel, skill: Skill, schema: z.ZodType<T>, 
       providerOptions: { openrouter: { reasoning: { effort: "medium" } } },
       abortSignal: AbortSignal.any([signal, timeout]),
     });
-    const usage = tokensOf(result.usage);
+    usage = tokensOf(result.usage);
     const parsed = schema.safeParse(result.output);
-    return parsed.success ? { ok: true, output: parsed.data, usage } : { ok: false, problems: issuesOf(parsed.error), usage };
+    got = parsed.success ? { ok: true, value: parsed.data } : { ok: false, problems: issuesOf(parsed.error) };
   } catch (error) {
     if (signal.aborted) throw error;
-    if (timeout.aborted) return { ok: false, problems: [`the call took over ${CALL_TIMEOUT_MS / 1000} s and was cut off`], usage: tokensOf() };
-    if (NoObjectGeneratedError.isInstance(error)) return { ok: false, problems: ["the reply was not one complete JSON object"], usage: tokensOf(error.usage) };
-    return { ok: false, problems: [String(error instanceof Error ? error.message : error).split("\n")[0].slice(0, 300)], usage: tokensOf() };
+    let problem = String(error instanceof Error ? error.message : error).split("\n")[0].slice(0, 300);
+    if (timeout.aborted) problem = `the call took over ${CALL_TIMEOUT_MS / 1000} s and was cut off`;
+    else if (NoObjectGeneratedError.isInstance(error)) {
+      usage = tokensOf(error.usage);
+      problem = "the reply was not one complete JSON object";
+    }
+    got = { ok: false, problems: [problem] };
   }
+  // Outside the try, so a bug in the checks crashes the run instead of passing as a rejected answer.
+  const reply = got.ok ? accept(got.value) : got;
+  observer.finished({ ...usage, ok: reply.ok, ms: Date.now() - startedAt, problems: reply.ok ? [] : reply.problems });
+  return reply;
 }
 
 /** Asks at most twice. The second call shows the model why its first answer was rejected. */
@@ -101,20 +122,18 @@ async function askTwice<T, R>(
   skill: Skill,
   schema: z.ZodType<T>,
   prompt: string,
-  accept: (output: T) => Checked<R>,
+  accept: (output: T) => Attempt<R>,
   signal: AbortSignal,
+  observer: CallObserver,
 ): Promise<Attempt<R>> {
-  let usage = tokensOf();
   let problems: string[] = [];
-  for (let calls = 1; calls <= 2; calls++) {
+  for (let call = 1; call <= 2; call++) {
     const feedback = problems.length ? `\n\nYour last answer was rejected:\n${bullets(problems)}` : "";
-    const reply = await ask(model, skill, schema, prompt + feedback, signal);
-    usage = addUsage(usage, reply.usage);
-    const checked = reply.ok ? accept(reply.output) : reply;
-    if (checked.ok) return { ok: true, value: checked.value, calls, usage };
-    problems = checked.problems;
+    const reply = await ask(model, skill, schema, prompt + feedback, accept, signal, observer);
+    if (reply.ok) return reply;
+    problems = reply.problems;
   }
-  return { ok: false, problems, calls: 2, usage };
+  return { ok: false, problems };
 }
 
 export function sortProblems(reply: SortReply, count: number): string[] {
@@ -129,14 +148,14 @@ export function sortProblems(reply: SortReply, count: number): string[] {
 }
 
 /** Picks the PR sentences that state nothing a user can see, from the sentences alone. Each comes back as its exact text. */
-export async function sortSentences(prText: string, model: LanguageModel, signal: AbortSignal): Promise<Attempt<NotTestable[]>> {
+export async function sortSentences(prText: string, model: LanguageModel, signal: AbortSignal, observer: CallObserver): Promise<Attempt<NotTestable[]>> {
   const sentences = sentencesOf(prText);
-  return askTwice(model, "sort-sentences", SortReplySchema, renderSortInput(prText), (reply): Checked<NotTestable[]> => {
+  return askTwice(model, "sort-sentences", SortReplySchema, renderSortInput(prText), (reply): Attempt<NotTestable[]> => {
     const problems = sortProblems(reply, sentences.length);
     if (problems.length) return { ok: false, problems };
     const inOrder = [...reply.notTestable].sort((a, b) => a.sentence - b.sentence);
     return { ok: true, value: inOrder.map(({ sentence, reason }) => ({ quote: sentences[sentence - 1], reason })) };
-  }, signal);
+  }, signal, observer);
 }
 
 /** The model writes only claims. The not-testable sentences come from sortSentences, so the planner cannot excuse itself. */
@@ -145,21 +164,24 @@ export async function planScenario(
   notTestable: readonly NotTestable[],
   model: LanguageModel,
   signal: AbortSignal,
+  observer: CallObserver,
 ): Promise<Attempt<Scenario>> {
-  return askTwice(model, "prove-change", PlanReplySchema, renderPlannerInput(input, notTestable), ({ claims }): Checked<Scenario> => {
+  return askTwice(model, "prove-change", PlanReplySchema, renderPlannerInput(input, notTestable), ({ claims }): Attempt<Scenario> => {
     const scenario: Scenario = { claims, notTestable };
     const problems = planProblems(scenario, input.prText, "model");
     return problems.length ? { ok: false, problems } : { ok: true, value: scenario };
-  }, signal);
+  }, signal, observer);
 }
 
+/** One call that replaces only the failing checks. A rejected answer leaves the plan as it was. */
 export async function repairChecks(
   input: PlannerInput,
   model: LanguageModel,
   scenario: Scenario,
   failing: readonly FailingCheck[],
   signal: AbortSignal,
-): Promise<RepairResult> {
+  observer: CallObserver,
+): Promise<Attempt<Scenario>> {
   const prompt = [
     renderPlannerInput(input, scenario.notTestable),
     `# Your plan\n${JSON.stringify(scenario, null, 2)}`,
@@ -171,13 +193,10 @@ export async function repairChecks(
       + `A missing target is not proof. Do not move a step onto a name this PR adds. If a step uses a control this PR renames, use the name from before the change. An assertion about a new control belongs in "then". `
       + `Expected values in "then" still come from the PR text only.`,
   ].join("\n\n");
-  const reply = await ask(model, "prove-change", RepairSchema, prompt, signal);
-  if (!reply.ok) return reply;
-  const { checks } = reply.output;
-  if (checks.length !== failing.length) {
-    return { ok: false, problems: [`returned ${checks.length} checks, expected ${failing.length}`], usage: reply.usage };
-  }
-  const repaired = replaceChecks(scenario, failing, checks);
-  const problems = planProblems(repaired, input.prText, "model");
-  return problems.length ? { ok: false, problems, usage: reply.usage } : { ok: true, scenario: repaired, usage: reply.usage };
+  return ask(model, "prove-change", RepairSchema, prompt, ({ checks }): Attempt<Scenario> => {
+    if (checks.length !== failing.length) return { ok: false, problems: [`returned ${checks.length} checks, expected ${failing.length}`] };
+    const repaired = replaceChecks(scenario, failing, checks);
+    const problems = planProblems(repaired, input.prText, "model");
+    return problems.length ? { ok: false, problems } : { ok: true, value: repaired };
+  }, signal, observer);
 }

@@ -312,8 +312,18 @@ async function look(s: Session): Promise<UiReference> {
   return { ariaSnapshot, files, truncated };
 }
 
-/** Runs one frozen check on a fresh browser context and records every step, with evidence, into `dir`. */
-export async function runCheck(browser: Browser, app: RunningApp, check: NumberedCheck, dir: string, signal: AbortSignal): Promise<CheckRun> {
+/**
+ * Runs one frozen check on a fresh browser context and records every step, with evidence, into `dir`.
+ * `onStep` hears each step as it is recorded, and hears the last step again if the app's death rewrites it.
+ */
+export async function runCheck(
+  browser: Browser,
+  app: RunningApp,
+  check: NumberedCheck,
+  dir: string,
+  signal: AbortSignal,
+  onStep: (result: StepResult) => void = () => {},
+): Promise<CheckRun> {
   const out = resolve(dir);
   await mkdir(out, { recursive: true });
   const s = await openSession(browser, app, signal, { recordVideo: { dir: out } });
@@ -323,10 +333,14 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
     const traceFailure = await s.context.tracing.start({ screenshots: true, snapshots: true }).then(() => null, firstLine);
     const whenAt = check.given.length;
     const steps: StepResult[] = [];
+    const push = (result: StepResult) => {
+      steps.push(result);
+      onStep(result);
+    };
     let stopped = false;
     for (const [index, step] of stepsOf(check).entries()) {
       if (stopped) {
-        steps.push({ status: "skipped", index });
+        push({ status: "skipped", index });
         continue;
       }
       // The start page has its own 20s. The step has its own. The screenshot is outside both, so a slow
@@ -340,21 +354,23 @@ export async function runCheck(browser: Browser, app: RunningApp, check: Numbere
           ?? await runStep(s, step, phaseOf(check, index))));
       }
       if (problem === HANG) {
-        steps.push({ ...hung, index, atMs: Date.now() - startedAt, screenshot: lost, aria: lost });
+        push({ ...hung, index, atMs: Date.now() - startedAt, screenshot: lost, aria: lost });
         stopped = true;
         continue;
       }
       const result = await record(s, out, index, Date.now() - startedAt, problem);
-      steps.push(result);
+      push(result);
       stopped = result.status !== "passed";
     }
     // An app that dies right after it answers leaves the updated page on screen, so every assertion still holds.
     const last = steps[steps.length - 1];
     if (last.status === "passed" && !(await app.alive())) {
-      steps[steps.length - 1] = {
+      const down: StepResult = {
         status: "could_not_run", cause: "app_down", detail: "the app stopped running by the end of the check",
         index: last.index, atMs: last.atMs, screenshot: last.screenshot, aria: { state: "missing", reason: "the app had stopped" },
       };
+      steps[steps.length - 1] = down;
+      onStep(down);
     }
     const trace: Evidence = traceFailure === null
       ? await capture(join(out, "trace.zip"), (path) => s.context.tracing.stop({ path }))
