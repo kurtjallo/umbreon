@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { renderReport } from "./report.ts";
+import type { PlanSummary, RunEvent, RunEventBody } from "./events.ts";
+import { lineOf, renderReport } from "./report.ts";
 import { ScenarioSchema, checksOf, freeze, stepsOf, type FrozenScenario, type NumberedCheck, type PlanSource } from "./scenario.ts";
 import { decide, type CheckRun, type Evidence, type Halt, type RunRecord, type StepResult } from "./verdict.ts";
 
@@ -168,4 +169,67 @@ test("halt: the reason the run stopped, with no plan and no commit", () => {
     "   error: public/app.js: patch does not apply",
     "NOT PROVEN: 0 of 0 passed, 0 failed, 0 could not run",
   ].join("\n"));
+});
+
+const at = <T extends RunEventBody>(seq: number, body: T): RunEvent => ({ ...body, seq, at: "2026-10-18T10:00:00Z" });
+const summary: PlanSummary = {
+  claims: [
+    { id: "c1", quote: "q1", it: "i1", checks: [{ id: "c1.1", it: "x", steps: [] }, { id: "c1.2", it: "y", steps: [] }] },
+    { id: "c2", quote: "q2", it: "i2", checks: [{ id: "c2.1", it: "z", steps: [] }] },
+  ],
+  notTestable: [{ quote: "History.", reason: "History: how it was." }],
+  uncovered: [],
+};
+
+test("lineOf prints the lines verify used to log, one per event, and nothing for the events only the dashboard shows", () => {
+  const lines = [
+    at(1, { type: "run_started", runId: "20261018-100000-delete-bug-ab12", caseName: "delete-bug", pid: 7, capMs: 480_000 }),
+    at(2, { type: "stage_started", stage: "repo" }),
+    at(3, { type: "repo_ready", base: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c", commit: COMMIT }),
+    at(4, { type: "look_ready", files: 3, truncated: true }),
+    at(5, { type: "model_call_started", purpose: "sort" }),
+    at(6, { type: "model_call", purpose: "sort", ok: true, ms: 12_340, inputTokens: 1234, outputTokens: 56, problems: [] }),
+    at(7, { type: "model_call", purpose: "plan", ok: false, ms: 90_000, inputTokens: 20_000, outputTokens: 900, problems: ["claim 1: bad quote", "claim 2: bad quote"] }),
+    at(8, { type: "plan", frozen: false, sha256: null, plan: summary }),
+    at(9, { type: "plan", frozen: false, sha256: null, plan: { ...summary, notTestable: [] } }),
+    at(10, { type: "plan", frozen: true, sha256: "abc", plan: summary }),
+    at(11, { type: "check_started", phase: "rehearse", side: "old", checkId: "c1.1" }),
+    at(12, { type: "check_finished", phase: "rehearse", side: "old", checkId: "c1.1", ready: true, problem: null }),
+    at(13, { type: "check_finished", phase: "rehearse", side: "old", checkId: "c1.2", ready: false, problem: 'no match: when step 1 click button "Clear completed": nothing matched' }),
+    at(14, { type: "check_finished", phase: "rehearse", side: "new", checkId: "c1.2", ready: true, problem: null }),
+    at(15, { type: "check_finished", phase: "rehearse", side: "new", checkId: "c2.1", ready: false, problem: "the start page did not load: boom" }),
+    at(16, { type: "model_call", purpose: "repair", ok: false, ms: 5000, inputTokens: 100, outputTokens: 10, problems: ["returned 1 checks, expected 2"] }),
+    at(17, { type: "check_started", phase: "drive", checkId: "c1.1" }),
+    at(18, { type: "step", phase: "drive", checkId: "c1.1", index: 0, status: "passed", atMs: 100, detail: null, screenshot: "c1.1/01.png" }),
+    at(19, { type: "check_finished", phase: "drive", checkId: "c1.1", result: "failed", problem: 'then step 2 expect_focus button "Delete Alpha": expected focus on button "Delete Alpha", saw focus on button "Delete Beta"', video: "c1.1/video.webm" }),
+    at(20, { type: "check_finished", phase: "baseline", checkId: "c1.1", result: "passed", problem: null, video: "baseline/c1.1/video.webm" }),
+    at(21, { type: "check_finished", phase: "drive", checkId: "c2.1", result: "could_not_run", problem: "the app never answered", video: null }),
+    at(22, { type: "verdict", kind: "NOT PROVEN", commit: COMMIT, checks: [], halt: { stage: "look", reason: "app_never_ready" }, reasons: ["Stopped: the app never answered."] }),
+    at(23, { type: "verdict", kind: "PROVEN", commit: COMMIT, checks: [{ checkId: "c1.1", result: "passed" }], halt: null, reasons: [] }),
+  ].map(lineOf);
+  assert.deepEqual(lines, [
+    "run 20261018-100000-delete-bug-ab12",
+    null,
+    "repo: old 0f1e2d3, changed 8e41c07",
+    "look: 3 files, cut short",
+    "sort: asking the model",
+    "sort: answered in 12.3 s, 1.2k in / 56 out",
+    "plan: answer rejected after 90.0 s, 20.0k in / 900 out (claim 1: bad quote)",
+    "plan: 2 claims, 3 checks, 1 sentence not testable",
+    "plan: 2 claims, 3 checks",
+    null,
+    null,
+    "rehearse c1.1: ready",
+    'rehearse c1.2: not ready on the app before this change (no match: when step 1 click button "Clear completed": nothing matched)',
+    "rehearse c1.2: needs something this change adds; kept",
+    "rehearse c2.1: not ready on the app with this change (the start page did not load: boom)",
+    "repair: answer rejected after 5.0 s, 100 in / 10 out (returned 1 checks, expected 2); keeping the plan as it is",
+    null,
+    null,
+    'drive c1.1: failed, then step 2 expect_focus button "Delete Alpha": expected focus on button "Delete Alpha", saw focus on button "Delete Beta"',
+    "baseline c1.1: passed",
+    "drive c2.1: could not run, the app never answered",
+    "decide: NOT PROVEN (look: app_never_ready)",
+    "decide: PROVEN",
+  ]);
 });

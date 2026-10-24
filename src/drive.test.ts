@@ -10,7 +10,7 @@ import { chromium, type Browser } from "playwright";
 import { DEMO_TODO, loadCase, preflight, prepareApp, withApp, type Repo, type RunningApp } from "./app.ts";
 import { lookAtApp, rehearseCheck, runCheck } from "./drive.ts";
 import { ScenarioSchema, checksOf, freeze, type FrozenScenario } from "./scenario.ts";
-import { decide, failureBefore, type CheckRun, type Evidence, type Outcome, type Verdict } from "./verdict.ts";
+import { decide, failureBefore, type CheckRun, type Evidence, type Outcome, type StepResult, type Verdict } from "./verdict.ts";
 
 const APP_DIR = fileURLToPath(new URL("../practice/demo-todo", import.meta.url));
 const PR_TEXT = readFileSync(join(APP_DIR, "prs/delete-correct/pr.md"), "utf8");
@@ -185,8 +185,9 @@ test("an app that crashes right after it answers ends the check as could not run
     "server.js": (js) => js.replace("res.writeHead(204).end();", "res.writeHead(204).end(() => process.exit(1));"),
   });
   const check = checksOf(fixture("good"))[0];
+  const heard: StepResult[] = [];
   const run = await withApp(dir, DEMO_TODO, { runId: `crash-after-${process.pid}`, check: check.id }, never, (app) =>
-    runCheck(browser, app, check, join(tmp, "runs", "crash-after", check.id), never));
+    runCheck(browser, app, check, join(tmp, "runs", "crash-after", check.id), never, (step) => heard.push(step)));
   assert.deepEqual(run.steps.map((step) => step.status), [...Array(7).fill("passed"), "could_not_run"]);
   const last = run.steps[7];
   assert.ok(last.status === "could_not_run", JSON.stringify(last));
@@ -195,6 +196,8 @@ test("an app that crashes right after it answers ends the check as could not run
   assert.ok(await onDisk(last.screenshot), "the last step's screenshot is kept");
   assert.equal(last.aria.state, "missing");
   assert.equal(failureBefore(check, run), null);
+  assert.deepEqual(heard.map((step) => [step.index, step.status]), [...run.steps.slice(0, 7).map((step) => [step.index, "passed"]), [7, "passed"], [7, "could_not_run"]]);
+  assert.deepEqual(heard.at(-1), last, "the rewritten step is reported once more, so a listener can replace the passed one");
 });
 
 test("rehearsal on the old app passes every good check and stops the check with no setup", async () => {
