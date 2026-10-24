@@ -26,17 +26,18 @@ export function describeStep(step: Step): string {
   }
 }
 
-/** Numbers a step within its phase, the way the plan lists it: `then step 1 expect_focus button "Delete Buy milk"`. */
 export function stepName(check: Check, index: number): string {
   const phase = phaseOf(check, index);
   const first = phase === "given" ? 0 : phase === "when" ? check.given.length : check.given.length + check.when.length;
   return `${phase} step ${index - first + 1} ${describeStep(stepsOf(check)[index])}`;
 }
 
+export const firstLine = (error: unknown) => String(error instanceof Error ? error.message : error).split("\n")[0];
+
 const MARK: Record<Outcome["result"], string> = { passed: "✅", failed: "❌", could_not_run: "⊘", evidence_missing: "⊘" };
 
 const short = (sha: string) => sha.slice(0, 7);
-const tokens = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`);
+export const tokens = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`);
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
 
 function header(record: RunRecord): string {
@@ -51,7 +52,6 @@ function header(record: RunRecord): string {
 
 type Shown = { label: string; evidence: Evidence; suffix?: string };
 
-/** Names the check's folder once, then each file in it: `evidence in runs/r/c1.1: 08.png · video.webm at 0:07 · ...`. */
 function evidenceLine(run: CheckRun | undefined, at: FailedStep | CouldNotRunStep | null, cwd: string): string[] {
   const items: Shown[] = [
     ...(at ? [{ label: "screenshot", evidence: at.screenshot }, { label: "ARIA snapshot", evidence: at.aria }] : []),
@@ -74,7 +74,6 @@ function evidenceLine(run: CheckRun | undefined, at: FailedStep | CouldNotRunSte
   return [`   ${files.length ? `evidence in ${relative(cwd, dir)}: ` : ""}${shown.join(" · ")}`];
 }
 
-/** Names the step that stopped a check and what happened: `then step 2 expect_focus button "Delete Alpha": expected ..., saw ...`. */
 export function stepProblem(check: Check, at: FailedStep | CouldNotRunStep): string {
   return at.status === "failed"
     ? `${stepName(check, at.index)}: expected ${at.expected}, saw ${at.observed}`
@@ -116,7 +115,6 @@ export function resultOf(run: CheckRun): string {
   return !at ? "passed" : at.status === "could_not_run" ? `could not run (${at.cause.replace("_", " ")})` : at.status;
 }
 
-/** Why a run is not proven, as the report shows it: the halt or blocker on one line, details indented under it. */
 export function blockerLines(blocker: Blocker, baseline: readonly CheckRun[]): string[] {
   switch (blocker.reason) {
     case "halted":
@@ -162,7 +160,6 @@ function rehearseLine(event: Extract<RunEvent, { type: "check_finished"; phase: 
   return `rehearse ${event.checkId}: not ready on the app ${event.side === "old" ? "before" : "with"} this change (${event.problem})`;
 }
 
-/** The one line `umbreon verify` prints for an event while a run goes, or null for events only the dashboard shows. */
 export function lineOf(event: RunEvent): string | null {
   switch (event.type) {
     case "run_started": return `run ${event.runId}`;
@@ -192,7 +189,6 @@ export function lineOf(event: RunEvent): string | null {
   }
 }
 
-/** The text `umbreon verify` prints. Evidence paths are shown relative to `cwd`. */
 export function renderReport(record: RunRecord, cwd: string): string {
   const checks = record.scenario ? checksOf(record.scenario) : [];
   const checkOf = (id: string) => {

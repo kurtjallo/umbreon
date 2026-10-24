@@ -119,7 +119,7 @@ type Rehearsal = { state: "rehearsing" | "ready" | "kept" | "not_ready"; side: S
 const READY_ON: Record<Side, Rehearsal["state"]> = { old: "ready", new: "kept" };
 type StartedCall = { purpose: CallPurpose; at: number };
 type PhaseRun = { state: "running" | RunResult; problem: string | null; video: string | null; steps: Map<number, StepEvent> };
-/** Everything the events said about one check. Each phase keeps its own steps, so a baseline rerun never overwrites the drive. */
+/** Each phase keeps its own steps, so a baseline rerun never overwrites the drive. */
 type CheckLog = { rehearsal: Rehearsal | null; runs: Partial<Record<RunPhase, PhaseRun>> };
 
 const ms = (iso: string) => Date.parse(iso);
@@ -191,7 +191,7 @@ function checkView(check: PlanCheck, log: CheckLog | undefined, judged: Outcome[
   };
 }
 
-/** Folds a run's events into what the dashboard draws. `alive` says whether the run's process still exists. */
+/** `alive` says whether the run's process still exists. */
 export function viewOf(events: readonly RunEvent[], now: Date, alive: boolean): RunView {
   const started = events[0];
   if (started?.type !== "run_started") throw new Error("a run's events start with run_started");
@@ -351,7 +351,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".md": "text/plain; charset=utf-8",
 };
 
-/** Maps `/runs/<runId>/<path>` to a file inside that run's folder, or null. Checks run after decoding, so `%2e%2e` is caught too. */
+/** The path checks run after decoding, so `%2e%2e` is caught too. */
 export function evidenceFile(runsDir: string, pathname: string): string | null {
   const match = /^\/runs\/([^/]+)\/(.+)$/.exec(pathname);
   if (!match) return null;
@@ -370,7 +370,7 @@ export function evidenceFile(runsDir: string, pathname: string): string | null {
   return runDir.startsWith(root + sep) && file.startsWith(runDir + sep) ? file : null;
 }
 
-/** Reads one `bytes=` range. The browser's video player needs ranges before it can seek, e.g. to the moment a check failed. */
+/** The browser's video player needs ranges before it can seek, e.g. to the moment a check failed. */
 export function byteRange(header: string | undefined, size: number): { start: number; end: number } | "unsatisfiable" | null {
   const match = /^bytes=(\d*)-(\d*)$/.exec(header ?? "");
   if (!match || (match[1] === "" && match[2] === "")) return null;
@@ -385,7 +385,6 @@ export type Dashboard = { url: string; close(): Promise<void> };
 type Client = { res: ServerResponse; run: string | null; last: string };
 type LoadedRun = { size: number; events: RunEvent[]; pid: number };
 
-/** Serves the dashboard on 127.0.0.1 only: the page, a live stream of run views, and the runs' evidence files. */
 export async function serveDashboard(options: DashboardOptions): Promise<Dashboard> {
   const { runsDir, port = 4300, isAlive = processAlive, pollMs = 250 } = options;
   let runs = new Map<string, LoadedRun>();
@@ -393,7 +392,7 @@ export async function serveDashboard(options: DashboardOptions): Promise<Dashboa
   let timers: NodeJS.Timeout[] = [];
   let hosts: ReadonlySet<string> = new Set();
 
-  /** Re-reads each events file whose size changed. Run ids start with their start time, so name order is newest first. */
+  /** Run ids start with their start time, so name order is newest first. */
   const refresh = (): boolean => {
     let names: string[] = [];
     try {

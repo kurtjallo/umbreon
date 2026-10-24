@@ -65,7 +65,6 @@ export type Scenario = DeepReadonly<z.infer<typeof ScenarioSchema>>;
 export type NotTestable = Scenario["notTestable"][number];
 export type NumberedCheck = Check & { readonly id: string; readonly claimId: string; readonly claimIndex: number; readonly checkIndex: number };
 
-/** What the planner learns about the running app before it writes a plan. */
 export type UiReference = { ariaSnapshot: string; files: { url: string; text: string }[]; truncated: boolean };
 
 export type PlanSource =
@@ -81,12 +80,14 @@ export type FrozenScenario = Scenario & {
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const HEADING = /^ {0,3}#{1,6}(\s|$)/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+\.)\s+/;
+const SENTENCE_END = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|vs|cf)\.)\s+/i;
 
 /**
- * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space. Headings are dropped.
+ * Paragraphs and list items are units, and each unit splits on ".", "!" or "?" followed by a space, except after "e.g.",
+ * "i.e.", "vs." or "cf.", which sit mid-sentence. Headings are dropped.
  * A list item ends before the next line that is not indented under it, so "- Undo" is not glued to the sentence below.
  * A one-word unit counts, because "Undo" can be a promise. A piece shorter than 8 characters counts only when it is the
- * whole unit, so a cut such as "e.g." is dropped and "N/A" is kept. A repeated sentence counts once.
+ * whole unit, so a cut such as "Wait..." is dropped and "N/A" is kept. A repeated sentence counts once.
  */
 export function sentencesOf(prText: string): string[] {
   const units: string[] = [];
@@ -97,7 +98,7 @@ export function sentencesOf(prText: string): string[] {
     buf = [];
     kind = null;
     if (!text) return;
-    const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+    const parts = text.split(SENTENCE_END).filter(Boolean);
     units.push(...(parts.length === 1 ? parts : parts.filter((part) => part.length >= SHORT_QUOTE)));
   };
   for (const line of prText.split("\n")) {
@@ -136,7 +137,6 @@ function sentencesContaining(quote: string, prText: string): number[] {
   return sentences.flatMap((sentence, index) => (sentence.includes(needle) ? [index] : []));
 }
 
-/** The sentences these quotes pick out. A quote that matches no sentence, or several, picks out none. */
 function quoted(quotes: readonly { quote: string }[], prText: string): Set<number> {
   return new Set(quotes.flatMap(({ quote }) => {
     const hits = sentencesContaining(quote, prText);
@@ -144,7 +144,6 @@ function quoted(quotes: readonly { quote: string }[], prText: string): Set<numbe
   }));
 }
 
-/** PR sentences that no claim with checks quotes and no not-testable entry marks. */
 export function uncoveredSentences(scenario: Scenario, prText: string): string[] {
   const accounted = quoted([...scenario.claims.filter((claim) => claim.checks.length > 0), ...scenario.notTestable], prText);
   return sentencesOf(prText).filter((_, index) => !accounted.has(index));

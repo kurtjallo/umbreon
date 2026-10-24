@@ -87,9 +87,17 @@ test("a one-word bullet stays its own sentence when the next line is not indente
 
 test("a short piece cut on a period is dropped, and a short unit that was not cut is kept", () => {
   assert.deepEqual(sentencesOf("Wait... undo is back."), ["undo is back."]);
-  assert.deepEqual(sentencesOf("e.g. focus stays put."), ["focus stays put."]);
   assert.deepEqual(sentencesOf("N/A"), ["N/A"]);
   assert.deepEqual(sentencesOf("- Undo"), ["Undo"]);
+});
+
+test("sentencesOf does not split after e.g., i.e., vs. or cf., in any case", () => {
+  assert.deepEqual(sentencesOf("Some buttons, e.g. Delete, now ask before removing a task."), [
+    "Some buttons, e.g. Delete, now ask before removing a task.",
+  ]);
+  assert.deepEqual(sentencesOf("E.G. focus stays put. Undo i.e. Ctrl+Z works. Old vs. new and CF. the docs."), [
+    "E.G. focus stays put.", "Undo i.e. Ctrl+Z works.", "Old vs. new and CF. the docs.",
+  ]);
 });
 
 test("sentencesOf keeps bullets without full stops apart, in every list style", () => {

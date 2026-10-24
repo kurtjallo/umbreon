@@ -25,10 +25,10 @@ export const DEMO_TODO: AppProfile = {
 };
 
 // No field for expected.json: the answer key must never reach the planner.
-export type Case = { name: string; caseDir: string; appDir: string; prText: string; diffFile: string };
+export type Case = { name: string; caseDir: string; appDir: string; prText: string; title: string; diffFile: string };
 export type Repo = { dir: string; commit: string };
 export type PreparedApp =
-  | { ok: true; old: Repo; new: Repo; diff: string; title: string }
+  | { ok: true; old: Repo; new: Repo; diff: string }
   | { ok: false; base: string; detail: string };
 export type RunningApp = { origin: string; startUrl: string; alive(): Promise<boolean>; logs(): Promise<string> };
 
@@ -77,14 +77,23 @@ export async function loadCase(caseDir: string): Promise<Case> {
   const dir = resolve(caseDir);
   const appDir = resolve(dir, "../..");
   const diffFile = join(dir, "change.diff");
+  const prFile = join(dir, "pr.md");
+  let prText: string;
   try {
-    const prText = await readFile(join(dir, "pr.md"), "utf8");
+    prText = await readFile(prFile, "utf8");
     await access(diffFile);
     await access(join(appDir, "package.json"));
-    return { name: basename(dir), caseDir: dir, appDir, prText, diffFile };
   } catch (e) {
     throw new SetupError(`${dir} is not a case folder: ${(e as Error).message}`);
   }
+  const title = prText.split("\n", 1)[0].replace(/^#\s*/, "").trim();
+  if (!title) throw new SetupError(`${prFile} has no title: its first line must be the PR title`);
+  // The base app comes from `git archive HEAD`, so an edit that is not committed would be silently left out.
+  const { stdout: dirty } = await git(appDir, ["status", "--porcelain", "--", ".", ":(exclude)prs"]);
+  if (dirty) {
+    throw new SetupError(`${appDir} has uncommitted changes. The run tests the committed app, so commit or stash them first:\n${dirty.trimEnd()}`);
+  }
+  return { name: basename(dir), caseDir: dir, appDir, prText, title, diffFile };
 }
 
 export async function prepareApp(c: Case, runDir: string): Promise<PreparedApp> {
@@ -110,10 +119,9 @@ export async function prepareApp(c: Case, runDir: string): Promise<PreparedApp> 
   } catch (e) {
     return { ok: false, base, detail: stderrOf(e) };
   }
-  const title = c.prText.split("\n", 1)[0].replace(/^#\s*/, "").trim();
-  const commit = await commitAll(newDir, title);
+  const commit = await commitAll(newDir, c.title);
   const { stdout: diff } = await git(newDir, ["diff", base, commit]);
-  return { ok: true, old: { dir: oldDir, commit: base }, new: { dir: newDir, commit }, diff, title };
+  return { ok: true, old: { dir: oldDir, commit: base }, new: { dir: newDir, commit }, diff };
 }
 
 async function commitAll(dir: string, message: string): Promise<string> {
@@ -198,10 +206,13 @@ async function waitReady(name: string, url: string, signal: AbortSignal, logs: (
 // so a 3xx to anywhere else must not be requested, and a 200 from there must not count as ready.
 export async function answers200(url: string, signal: AbortSignal): Promise<boolean> {
   const origin = new URL(url).origin;
+  const poll = AbortSignal.any([signal, AbortSignal.timeout(2_000)]);
+  const seen = new Set<string>();
   let current = url;
-  for (let hop = 0; hop < 5; hop++) {
-    try {
-      const res = await fetch(current, { redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(2_000)]) });
+  try {
+    while (!seen.has(current)) {
+      seen.add(current);
+      const res = await fetch(current, { redirect: "manual", signal: poll });
       await res.arrayBuffer();
       if (res.status === 200) return true;
       if (res.status < 300 || res.status >= 400) return false;
@@ -210,9 +221,9 @@ export async function answers200(url: string, signal: AbortSignal): Promise<bool
       const next = new URL(location, current);
       if (next.origin !== origin) return false;
       current = next.href;
-    } catch {
-      return false;
     }
+  } catch {
+    return false;
   }
   return false;
 }
@@ -236,7 +247,6 @@ async function logsOf(name: string): Promise<string> {
   }
 }
 
-/** Removes the containers and networks whose owner process is gone. */
 export async function sweepOrphans(): Promise<string[]> {
   const containers = await orphans(["ps", "-a"], "{{.Names}}");
   const networks = await orphans(["network", "ls"], "{{.Name}}");

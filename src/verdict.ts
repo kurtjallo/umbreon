@@ -102,7 +102,6 @@ export function showsChangeAdds(check: Check, step: Stopped): boolean {
   return step.status === "failed" && step.index >= check.given.length + check.when.length;
 }
 
-/** The first step that did not pass, when it shows the app before the change lacks what the change adds. */
 export function failureBefore(check: Check, run: CheckRun): FailedStep | CouldNotRunStep | null {
   const at = run.steps.find((step) => step.status !== "passed");
   return (at?.status === "failed" || at?.status === "could_not_run") && showsChangeAdds(check, at) ? at : null;

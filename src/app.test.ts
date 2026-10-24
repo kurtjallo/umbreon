@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { answers200, AppNeverReady, DEMO_TODO, loadCase, preflight, prepareApp, sweepOrphans, withApp } from "./app.ts";
+import { answers200, AppNeverReady, DEMO_TODO, loadCase, preflight, prepareApp, SetupError, sweepOrphans, withApp } from "./app.ts";
 
 const exec = promisify(execFile);
 const APP_DIR = fileURLToPath(new URL("../practice/demo-todo", import.meta.url));
@@ -22,6 +22,13 @@ before(async () => {
 });
 after(() => rm(tmp, { recursive: true, force: true }));
 
+const GIT_ENV = {
+  ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@localhost", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@localhost",
+};
+const commitRepo = async (dir: string) => {
+  for (const args of [["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "app"]]) await exec("git", ["-C", dir, ...args], { env: GIT_ENV });
+};
 const exists = (path: string) => stat(path).then(() => true, () => false);
 const listen = (server: http.Server) => new Promise<string>((done) => {
   server.listen(0, "127.0.0.1", () => {
@@ -51,6 +58,31 @@ test("a redirect off the app is not a ready answer, and a redirect on the app is
     app.close();
   }
 });
+test("one readiness poll fetches a redirect loop once and gives up after 2 s in all, however many hops", async () => {
+  let loops = 0;
+  const app = http.createServer((req, res) => {
+    if (req.url === "/loop") { loops++; res.writeHead(302, { Location: "/loop" }); res.end(); return; }
+    const hop = Number(/^\/slow(\d)$/.exec(req.url ?? "")?.[1]);
+    setTimeout(() => {
+      if (hop < 3) res.writeHead(302, { Location: `/slow${hop + 1}` });
+      else res.writeHead(200);
+      res.end();
+    }, 900);
+  });
+  const origin = await listen(app);
+  try {
+    assert.equal(await answers200(`${origin}/loop`, AbortSignal.timeout(10_000)), false);
+    assert.equal(loops, 1, "the loop is fetched once");
+    const started = performance.now();
+    assert.equal(await answers200(`${origin}/slow1`, AbortSignal.timeout(10_000)), false, "three 0.9 s hops do not fit in 2 s");
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2_500, `gave up after ${Math.round(elapsed)} ms`);
+  } finally {
+    app.closeAllConnections();
+    app.close();
+  }
+});
+
 const runId = (check: string) => `test-${process.pid}-${check}`;
 
 async function containersOfRun(id: string): Promise<string[]> {
@@ -95,14 +127,45 @@ test("loadCase reads pr.md and change.diff and never expected.json", async () =>
     caseDir: CASE_DIR,
     appDir: APP_DIR,
     prText: await readFile(join(CASE_DIR, "pr.md"), "utf8"),
+    title: "Keep focus in the task list after deleting",
     diffFile: join(CASE_DIR, "change.diff"),
   });
 
   const copy = join(tmp, "locked-app", "prs", "delete-correct");
   await cp(CASE_DIR, copy, { recursive: true });
   await writeFile(join(tmp, "locked-app", "package.json"), "{}");
+  await commitRepo(join(tmp, "locked-app"));
   await chmod(join(copy, "expected.json"), 0o000);
   assert.equal((await loadCase(copy)).prText, c.prText, "loads with expected.json unreadable");
+});
+
+test("loadCase rejects a pr.md whose first line has no title, naming the file", async () => {
+  for (const [name, firstLine] of [["empty", ""], ["hash", "#"], ["hash-space", "#   "]]) {
+    const dir = join(tmp, "untitled-app", "prs", name);
+    await cp(CASE_DIR, dir, { recursive: true });
+    await writeFile(join(tmp, "untitled-app", "package.json"), "{}");
+    await writeFile(join(dir, "pr.md"), `${firstLine}\nDelete keeps focus in the list.\n`);
+    await assert.rejects(loadCase(dir), (e) => e instanceof SetupError && e.message.includes(join(dir, "pr.md")), name);
+  }
+});
+
+test("loadCase rejects an app with uncommitted changes outside prs/, because the run tests the committed app", async () => {
+  const app = join(tmp, "dirty-app");
+  const dir = join(app, "prs", "delete-correct");
+  await cp(CASE_DIR, dir, { recursive: true });
+  await writeFile(join(app, "package.json"), "{}");
+  await writeFile(join(app, "server.js"), "// v1\n");
+  await commitRepo(app);
+  await writeFile(join(dir, "notes.txt"), "a change to a case is not a change to the app\n");
+  assert.equal((await loadCase(dir)).name, "delete-correct", "a change under prs/ is allowed");
+
+  const rejects = (file: string) =>
+    assert.rejects(loadCase(dir), (e) => e instanceof SetupError && /commit or stash/.test(e.message) && e.message.includes(file), file);
+  await writeFile(join(app, "server.js"), "// v2\n");
+  await rejects("server.js");
+  await writeFile(join(app, "server.js"), "// v1\n");
+  await writeFile(join(app, "extra.js"), "// not yet added\n");
+  await rejects("extra.js");
 });
 
 test("prepareApp gives the same commits every time and leaves prs/ out", async () => {
@@ -113,7 +176,6 @@ test("prepareApp gives the same commits every time and leaves prs/ out", async (
   assert.equal(a.old.commit, b.old.commit);
   assert.equal(a.new.commit, b.new.commit);
   assert.notEqual(a.old.commit, a.new.commit);
-  assert.equal(a.title, "Keep focus in the task list after deleting");
   for (const dir of [a.old.dir, a.new.dir]) assert.equal(await exists(join(dir, "prs")), false, `${dir} has no prs/`);
 
   const changed = [...a.diff.matchAll(/^diff --git a\/(\S+) /gm)].map((m) => m[1]);
